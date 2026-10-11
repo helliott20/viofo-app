@@ -73,6 +73,12 @@ import io.github.helliott20.dashlink.ui.LocalContainer
 import io.github.helliott20.dashlink.ui.components.LiveStream
 import io.github.helliott20.dashlink.ui.components.RecDot
 import io.github.helliott20.dashlink.ui.layoutInfo
+import io.github.helliott20.dashlink.ui.HingeSplit
+import io.github.helliott20.dashlink.ui.TwoPane
+import androidx.compose.runtime.movableContentOf
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.runtime.rememberUpdatedState
 import io.github.helliott20.dashlink.ui.theme.RecordRed
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
@@ -118,56 +124,52 @@ fun LiveTab(
     }
     BackHandler(fullscreen) { setFullscreen(false) }
 
-    // Stop streaming while the app is in the background.
-    val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
-    val ready = state.connected && state.mode == CameraMode.Live && lifecycle.isAtLeast(Lifecycle.State.STARTED)
-    val video: @Composable (Modifier) -> Unit = { m ->
-        Box(m.background(Color.Black)) {
-            val preview = LocalLivePreview.current
-            if (preview != null) {
-                preview(Modifier.fillMaxSize())
-            } else if (ready) {
-                // Re-keyed on liveToken so the stream re-opens when the camera set changes.
-                key(state.liveToken, state.liveUrl) { LiveStream(state.liveUrl, prefs.rtspOverTcp, Modifier.fillMaxSize()) }
-            } else {
-                Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (downloading && state.mode == CameraMode.Playback) {
-                        Icon(Icons.Outlined.CloudDownload, null, tint = Color.White.copy(alpha = 0.7f))
-                        Spacer(Modifier.height(8.dp))
-                        Text("Live view resumes when downloads finish", color = Color.White.copy(alpha = 0.8f), textAlign = TextAlign.Center)
-                        Text("View downloads", Modifier.clickable(onClick = openDownloads).padding(8.dp), color = MaterialTheme.colorScheme.primary)
-                    } else {
-                        Text(if (state.connected) "Starting live view…" else "Waiting for camera…", color = Color.White.copy(alpha = 0.7f))
-                    }
-                }
-            }
-            if (fullscreen) {
-                RecDot(state.recording, Modifier.align(Alignment.TopStart).windowInsetsPadding(WindowInsets.safeDrawing).padding(16.dp))
-                Row(Modifier.align(Alignment.CenterEnd).windowInsetsPadding(WindowInsets.safeDrawing).padding(16.dp)) {
-                    Controls(vertical = true, fullscreen = true, onFullscreen = setFullscreen)
-                }
-            }
+    // The video lives in movable content: when the window changes shape (fold, unfold,
+    // tabletop, split-screen) it moves to its new spot instead of being rebuilt, so the
+    // live stream keeps playing rather than reconnecting.
+    val currentSetFullscreen by rememberUpdatedState(setFullscreen)
+    val currentOpenDownloads by rememberUpdatedState(openDownloads)
+    val video = remember {
+        movableContentOf { m: Modifier, fs: Boolean ->
+            LiveVideo(m, fs, onFullscreen = { currentSetFullscreen(it) }, openDownloads = { currentOpenDownloads() })
         }
     }
+    val controls: @Composable () -> Unit = { Controls(vertical = false, fullscreen = false, onFullscreen = setFullscreen) }
 
     when {
-        fullscreen -> video(Modifier.fillMaxSize())
-        layout.tabletop && layout.hingeTopPx != null -> TabletopLive(layout.hingeTopPx, layout.hingeBottomPx ?: layout.hingeTopPx, video) {
-            Controls(vertical = false, fullscreen = false, onFullscreen = setFullscreen)
-            Spacer(Modifier.height(16.dp))
-            AtAGlance(openSettings)
-        }
+        fullscreen -> video(Modifier.fillMaxSize(), true)
+        // Half-folded on the dashboard: picture above the hinge, controls on the flat half.
+        layout.tabletop -> HingeSplit(
+            layout,
+            top = { m -> video(m, false) },
+            bottom = { m ->
+                Column(m.verticalScroll(rememberScrollState()).padding(top = 16.dp)) {
+                    controls(); Spacer(Modifier.height(16.dp)); AtAGlance(openSettings)
+                }
+            },
+        )
+        // Half-open like a book, or a short split-screen window: picture beside the controls.
+        layout.book || (layout.wide && layout.compactHeight) -> TwoPane(
+            layout,
+            first = { m -> Box(m, contentAlignment = Alignment.Center) { video(Modifier.fillMaxWidth().aspectRatio(16f / 9f), false) } },
+            second = { m ->
+                Column(m.verticalScroll(rememberScrollState()).padding(vertical = 16.dp)) {
+                    controls(); Spacer(Modifier.height(16.dp)); AtAGlance(openSettings)
+                }
+            },
+            firstWeight = 1.5f,
+        )
         layout.wide -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            video(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+            video(Modifier.fillMaxWidth().aspectRatio(16f / 9f), false)
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) { Controls(vertical = false, fullscreen = false, onFullscreen = setFullscreen) }
+                Box(Modifier.weight(1f)) { controls() }
                 Box(Modifier.weight(1f)) { AtAGlance(openSettings, horizontalPadding = 0.dp) }
             }
         }
         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            video(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+            video(Modifier.fillMaxWidth().aspectRatio(16f / 9f), false)
             Spacer(Modifier.height(20.dp))
-            Controls(vertical = false, fullscreen = false, onFullscreen = setFullscreen)
+            controls()
             Spacer(Modifier.height(20.dp))
             AtAGlance(openSettings)
             Spacer(Modifier.height(16.dp))
@@ -175,20 +177,42 @@ fun LiveTab(
     }
 }
 
-/**
- * Half-folded on a dashboard or desk: the picture fills the upright half above the hinge,
- * controls sit on the flat half below it, where thumbs can reach them.
- */
+/** The picture itself: the live stream, or why there isn't one yet. */
 @Composable
-private fun TabletopLive(hingeTopPx: Int, hingeBottomPx: Int, video: @Composable (Modifier) -> Unit, below: @Composable () -> Unit) {
-    val density = LocalDensity.current
-    var topInWindow by remember { mutableIntStateOf(0) }
-    Column(Modifier.fillMaxSize().onGloballyPositioned { topInWindow = it.positionInWindow().y.toInt() }) {
-        val upper = with(density) { (hingeTopPx - topInWindow).coerceAtLeast(0).toDp() }
-        val gap = with(density) { (hingeBottomPx - hingeTopPx).coerceAtLeast(0).toDp() }
-        video(Modifier.fillMaxWidth().height(upper))
-        Spacer(Modifier.height(gap))
-        Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(top = 16.dp)) { below() }
+private fun LiveVideo(modifier: Modifier, fullscreen: Boolean, onFullscreen: (Boolean) -> Unit, openDownloads: () -> Unit) {
+    val c = LocalContainer.current
+    val state by c.session.state.collectAsStateWithLifecycle()
+    val prefs by c.prefs.settings.collectAsStateWithLifecycle(AppSettings())
+    val tasks by c.downloads.tasks.collectAsStateWithLifecycle()
+    val downloading = tasks.any { it.isActive }
+    // Stop streaming while the app is in the background.
+    val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+    val ready = state.connected && state.mode == CameraMode.Live && lifecycle.isAtLeast(Lifecycle.State.STARTED)
+    Box(modifier.background(Color.Black)) {
+        val preview = LocalLivePreview.current
+        if (preview != null) {
+            preview(Modifier.fillMaxSize())
+        } else if (ready) {
+            // Re-keyed on liveToken so the stream re-opens when the camera set changes.
+            key(state.liveToken, state.liveUrl) { LiveStream(state.liveUrl, prefs.rtspOverTcp, Modifier.fillMaxSize()) }
+        } else {
+            Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                if (downloading && state.mode == CameraMode.Playback) {
+                    Icon(Icons.Outlined.CloudDownload, null, tint = Color.White.copy(alpha = 0.7f))
+                    Spacer(Modifier.height(8.dp))
+                    Text("Live view resumes when downloads finish", color = Color.White.copy(alpha = 0.8f), textAlign = TextAlign.Center)
+                    Text("View downloads", Modifier.clickable(onClick = openDownloads).padding(8.dp), color = MaterialTheme.colorScheme.primary)
+                } else {
+                    Text(if (state.connected) "Starting live view…" else "Waiting for camera…", color = Color.White.copy(alpha = 0.7f))
+                }
+            }
+        }
+        if (fullscreen) {
+            RecDot(state.recording, Modifier.align(Alignment.TopStart).windowInsetsPadding(WindowInsets.safeDrawing).padding(16.dp))
+            Row(Modifier.align(Alignment.CenterEnd).windowInsetsPadding(WindowInsets.safeDrawing).padding(16.dp)) {
+                Controls(vertical = true, fullscreen = true, onFullscreen = onFullscreen)
+            }
+        }
     }
 }
 
@@ -221,6 +245,7 @@ private fun AtAGlance(openSettings: () -> Unit, horizontalPadding: androidx.comp
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun Controls(vertical: Boolean, fullscreen: Boolean, onFullscreen: (Boolean) -> Unit) {
     val c = LocalContainer.current
     val state by c.session.state.collectAsStateWithLifecycle()
@@ -231,11 +256,11 @@ private fun Controls(vertical: Boolean, fullscreen: Boolean, onFullscreen: (Bool
 
     @Composable
     fun Small(icon: ImageVector, label: String, onClick: () -> Unit, needsCamera: Boolean = true) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(if (vertical) Modifier else Modifier.width(76.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             FilledTonalIconButton(onClick = onClick, enabled = !needsCamera || enabled, modifier = Modifier.size(if (vertical) 48.dp else 52.dp)) { Icon(icon, label) }
             if (!vertical) {
                 Spacer(Modifier.height(4.dp))
-                Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false)
             }
         }
     }
@@ -278,6 +303,11 @@ private fun Controls(vertical: Boolean, fullscreen: Boolean, onFullscreen: (Bool
             verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally,
         ) { items.forEach { it() } }
     } else {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) { items.forEach { it() } }
+        // One row when there's room; wraps neatly in narrow panes (split-screen, book posture).
+        FlowRow(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) { items.forEach { item -> Box(Modifier.align(Alignment.CenterVertically)) { item() } } }
     }
 }

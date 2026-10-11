@@ -47,6 +47,9 @@ class AppContainer(context: Context) {
 
     val prefs = Prefs(context)
 
+    /** Selected clip and playback position, shared across fold/unfold. */
+    val ui = io.github.helliott20.dashlink.ui.UiState()
+
     /** Auto-connect happens once per app launch, never again after a manual disconnect. */
     var autoConnectDone = false
     val client = NovatekClient(commandHttp)

@@ -55,6 +55,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.helliott20.dashlink.api.CamFile
 import io.github.helliott20.dashlink.ui.layoutInfo
+import io.github.helliott20.dashlink.ui.HingeSplit
+import io.github.helliott20.dashlink.ui.TwoPane
+import androidx.compose.runtime.movableContentOf
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.rememberScrollState
@@ -75,15 +80,20 @@ import kotlinx.coroutines.withContext
 import java.io.FileInputStream
 import java.util.Locale
 
-/** Streams a clip straight from the camera's SD card (phone layout: its own screen). */
+/**
+ * Streams a clip straight from the camera's SD card: the phone (folded) layout. Unfold while
+ * watching and the clip moves into the Files pane, carrying on from the same moment.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RemotePlayerScreen(fpath: String, back: () -> Unit) {
+fun RemotePlayerScreen(fpath: String, back: () -> Unit, toPane: () -> Unit = back) {
     val c = LocalContainer.current
     val state by c.session.state.collectAsStateWithLifecycle()
-    var current by remember { mutableStateOf(fpath) }
-    val file = state.files.firstOrNull { it.fpath == current }
+    val selected by c.ui.clip.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { if (c.ui.clip.value == null) c.ui.select(fpath) }
+    val file = state.files.firstOrNull { it.fpath == (selected ?: fpath) }
     val snack = remember { SnackbarHostState() }
+    val layout = layoutInfo()
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     SessionSnackbars(snack)
     DisposableEffect(Unit) {
@@ -93,6 +103,8 @@ fun RemotePlayerScreen(fpath: String, back: () -> Unit) {
     LaunchedEffect(state.connected, state.mode) {
         if (state.connected && state.mode != CameraMode.Playback) c.session.enterPlayback()
     }
+    // Unfolded: the list-detail Files screen is the better home for this clip.
+    LaunchedEffect(layout.wide) { if (layout.wide) toPane() }
 
     // Deleted, or the list was refreshed without it: nothing left to show.
     if (file == null) {
@@ -100,8 +112,9 @@ fun RemotePlayerScreen(fpath: String, back: () -> Unit) {
         return
     }
     val siblings = state.files.filter { it.groupKey == file.groupKey && it.category == file.category }
-    if (landscape && !layoutInfo().wide) {
-        Box(Modifier.fillMaxSize().background(Color.Black)) { RemoteMedia(file, Modifier.fillMaxSize()) }
+    val video = remember { movableContentOf { m: Modifier, f: CamFile -> ClipVideo(f, m) } }
+    if (landscape && !layout.wide) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) { video(Modifier.fillMaxSize(), file) }
         return
     }
     Scaffold(
@@ -114,54 +127,69 @@ fun RemotePlayerScreen(fpath: String, back: () -> Unit) {
         },
         snackbarHost = { SnackbarHost(snack) },
     ) { pad ->
-        ClipDetail(file, siblings, onSelect = { current = it.fpath }, onDeleted = {}, modifier = Modifier.padding(pad))
+        ClipDetail(file, siblings, video = { m -> video(m, file) }, onDeleted = {}, modifier = Modifier.padding(pad))
     }
 }
 
+/** The clip's picture: video (resuming from the shared position) or a photo. */
 @Composable
-private fun RemoteMedia(file: CamFile, modifier: Modifier) {
+fun ClipVideo(file: CamFile, modifier: Modifier) {
     val c = LocalContainer.current
-    // Keyed so switching lens builds a fresh player.
-    androidx.compose.runtime.key(file.fpath) {
-        if (file.isVideo) ClipPlayer(Uri.parse(c.client.fileUrl(file)), modifier)
-        else coil.compose.AsyncImage(c.client.fileUrl(file), "Photo taken at ${file.time?.let { Format.time(it) } ?: file.name}", modifier)
+    Box(modifier.background(Color.Black)) {
+        // Keyed so switching lens builds a fresh player; it starts where the last one was.
+        androidx.compose.runtime.key(file.fpath) {
+            if (file.isVideo) ClipPlayer(
+                Uri.parse(c.client.fileUrl(file)), Modifier.fillMaxSize(),
+                onPosition = { c.ui.report(it) },
+                startPositionMs = c.ui.positionMs,
+            )
+            else coil.compose.AsyncImage(c.client.fileUrl(file), "Photo taken at ${file.time?.let { Format.time(it) } ?: file.name}", Modifier.fillMaxSize())
+        }
     }
 }
 
-/** A camera clip: player, lens switcher, details and actions. Used full screen on phones and as a pane when unfolded. */
+/** A camera clip: [video] on top, then lens switcher, details and actions. */
 @Composable
-fun ClipDetail(file: CamFile, siblings: List<CamFile>, onSelect: (CamFile) -> Unit, onDeleted: () -> Unit, modifier: Modifier = Modifier) {
+fun ClipDetail(file: CamFile, siblings: List<CamFile>, video: @Composable (Modifier) -> Unit, onDeleted: () -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        video(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+        ClipInfo(file, siblings, onDeleted)
+    }
+}
+
+/** Lens switcher, what the clip is, and what you can do with it. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun ClipInfo(file: CamFile, siblings: List<CamFile>, onDeleted: () -> Unit, modifier: Modifier = Modifier) {
     val c = LocalContainer.current
     var confirmDelete by remember { mutableStateOf(false) }
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black)) { RemoteMedia(file, Modifier.fillMaxSize()) }
-        Column(Modifier.padding(16.dp)) {
-            if (siblings.size > 1) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    siblings.forEach { s -> FilterChip(s.fpath == file.fpath, { onSelect(s) }, { Text(s.lens.label) }) }
-                }
-                Spacer(Modifier.height(12.dp))
-            }
-            Text(file.time?.let { Format.day(it) + ", " + Format.time(it) } ?: file.name, style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(2.dp))
-            Text(
-                listOfNotNull(file.category.label + " clip", Format.bytes(file.size), "protected from loop overwrite".takeIf { file.locked }).joinToString(", "),
-                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(file.name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(16.dp))
+    Column(modifier.padding(16.dp)) {
+        if (siblings.size > 1) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { c.session.download(listOf(file)) }) { Icon(Icons.Outlined.CloudDownload, null); Spacer(Modifier.width(6.dp)); Text("Download") }
-                if (siblings.size > 1) OutlinedButton(onClick = { c.session.download(siblings) }) { Text(if (siblings.size == 2) "Download both" else "Download all ${siblings.size}") }
+                // Front and rear were recorded together, so the new view picks up at the same moment.
+                siblings.forEach { s -> FilterChip(s.fpath == file.fpath, { c.ui.select(s.fpath, keepPosition = true) }, { Text(s.lens.label) }) }
             }
-            Spacer(Modifier.height(8.dp))
-            TextButton(onClick = { confirmDelete = true }) {
-                Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.error); Spacer(Modifier.width(6.dp))
-                Text("Delete from SD card", color = MaterialTheme.colorScheme.error)
-            }
-            Spacer(Modifier.height(8.dp))
-            Text("Download a clip to see its GPS route and speed.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(12.dp))
         }
+        Text(file.time?.let { Format.day(it) + ", " + Format.time(it) } ?: file.name, style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            listOfNotNull(file.category.label + " clip", Format.bytes(file.size), "protected from loop overwrite".takeIf { file.locked }).joinToString(", "),
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(file.name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(16.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { c.session.download(listOf(file)) }) { Icon(Icons.Outlined.CloudDownload, null); Spacer(Modifier.width(6.dp)); Text("Download") }
+            if (siblings.size > 1) OutlinedButton(onClick = { c.session.download(siblings) }) { Text(if (siblings.size == 2) "Download both" else "Download all ${siblings.size}") }
+        }
+        Spacer(Modifier.height(8.dp))
+        TextButton(onClick = { confirmDelete = true }) {
+            Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.error); Spacer(Modifier.width(6.dp))
+            Text("Delete from SD card", color = MaterialTheme.colorScheme.error)
+        }
+        Spacer(Modifier.height(8.dp))
+        Text("Download a clip to see its GPS route and speed.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (confirmDelete) ConfirmDialog("Delete this clip?", "It will be removed from the camera's SD card.", "Delete",
         onConfirm = { c.session.delete(listOf(file)); onDeleted() }, onDismiss = { confirmDelete = false }, destructive = true)
@@ -187,14 +215,21 @@ fun LocalPlayerScreen(uri: Uri, back: () -> Unit) {
     val prefs by LocalContainer.current.prefs.settings.collectAsStateWithLifecycle(AppSettings())
     val speed: (Double) -> String = { kmh -> if (prefs.speedMph) String.format(Locale.US, "%.0f mph", kmh / 1.609344) else String.format(Locale.US, "%.0f km/h", kmh) }
     val point = track?.let { t -> if (t.isEmpty()) null else t[(position / 1000).toInt().coerceIn(0, t.lastIndex)] }
-    val name = remember(uri) { uri.lastPathSegment.orEmpty() }
-
     val layout = layoutInfo()
-    if (landscape && !layout.wide) {
-        Box(Modifier.fillMaxSize().background(Color.Black)) {
-            ClipPlayer(uri, Modifier.fillMaxSize(), onPosition = { position = it })
-            point?.let { SpeedBadge(speed(it.speedKmh), Modifier.align(Alignment.TopEnd).padding(16.dp)) }
+
+    // One player for the screen's lifetime: folding, unfolding or rotating moves it, never restarts it.
+    val video = remember(uri) {
+        movableContentOf { m: Modifier, badge: String? ->
+            Box(m.background(Color.Black)) {
+                ClipPlayer(uri, Modifier.fillMaxSize(), onPosition = { position = it })
+                badge?.let { SpeedBadge(it, Modifier.align(Alignment.TopEnd).padding(12.dp)) }
+            }
         }
+    }
+    val badge = point?.let { speed(it.speedKmh) }
+
+    if (landscape && !layout.wide) {
+        video(Modifier.fillMaxSize(), badge)
         return
     }
     Scaffold(
@@ -213,35 +248,36 @@ fun LocalPlayerScreen(uri: Uri, back: () -> Unit) {
             )
         },
     ) { pad ->
-        val video: @Composable (Modifier) -> Unit = { m ->
-            Box(m.background(Color.Black)) {
-                ClipPlayer(uri, Modifier.fillMaxSize(), onPosition = { position = it })
-                point?.let { SpeedBadge(speed(it.speedKmh), Modifier.align(Alignment.TopEnd).padding(12.dp)) }
-            }
-        }
-        val gps: @Composable ColumnScope.() -> Unit = {
-            when {
-                track == null -> Text("Reading GPS…", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                track!!.isEmpty() -> Text("No GPS in this clip. The camera's GPS was off or hadn't got a fix yet.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                else -> {
-                    Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                        Stat("Speed", point?.let { speed(it.speedKmh) } ?: "—")
-                        Stat("Top speed", speed(track!!.maxOf { it.speedKmh }))
-                        Stat("Position", point?.let { String.format(Locale.US, "%.5f, %.5f", it.lat, it.lon) } ?: "—")
+        val gps: @Composable (Modifier) -> Unit = { m ->
+            Column(m) {
+                when {
+                    track == null -> Text("Reading GPS…", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    track!!.isEmpty() -> Text("No GPS in this clip. The camera's GPS was off or hadn't got a fix yet.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    else -> {
+                        Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                            Stat("Speed", badge ?: "—")
+                            Stat("Top speed", speed(track!!.maxOf { it.speedKmh }))
+                            Stat("Position", point?.let { String.format(Locale.US, "%.5f, %.5f", it.lat, it.lon) } ?: "—")
+                        }
+                        RouteMap(track!!, point, Modifier.fillMaxWidth().weight(1f).padding(horizontal = 16.dp).padding(bottom = 16.dp).clip(RoundedCornerShape(16.dp)))
                     }
-                    RouteMap(track!!, point, Modifier.fillMaxWidth().weight(1f).padding(horizontal = 16.dp).padding(bottom = 16.dp).clip(RoundedCornerShape(16.dp)))
                 }
             }
         }
+        val body = Modifier.fillMaxSize().padding(pad)
         when {
-            // Unfolded: video and map side by side.
-            layout.wide && !layout.tabletop -> Row(Modifier.fillMaxSize().padding(pad)) {
-                Column(Modifier.weight(1.3f).fillMaxHeight(), verticalArrangement = Arrangement.Center) { video(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) }
-                Column(Modifier.weight(1f).fillMaxHeight()) { gps() }
-            }
-            else -> Column(Modifier.fillMaxSize().padding(pad)) {
-                video(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
-                gps()
+            // Tabletop: watch on the upright half, map on the flat half.
+            layout.tabletop -> HingeSplit(layout, top = { m -> video(m, badge) }, bottom = { m -> gps(m) }, modifier = body)
+            // Unfolded or half-open like a book: video and map side by side.
+            layout.wide -> TwoPane(
+                layout,
+                first = { m -> Box(m, contentAlignment = Alignment.Center) { video(Modifier.fillMaxWidth().aspectRatio(16f / 9f), badge) } },
+                second = { m -> gps(m) },
+                modifier = body, firstWeight = 1.3f,
+            )
+            else -> Column(body) {
+                video(Modifier.fillMaxWidth().aspectRatio(16f / 9f), badge)
+                gps(Modifier.weight(1f))
             }
         }
     }

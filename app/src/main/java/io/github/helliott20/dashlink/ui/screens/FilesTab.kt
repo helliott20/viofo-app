@@ -83,6 +83,11 @@ import io.github.helliott20.dashlink.ui.LocalContainer
 import io.github.helliott20.dashlink.ui.components.ConfirmDialog
 import io.github.helliott20.dashlink.ui.components.EmptyState
 import io.github.helliott20.dashlink.ui.layoutInfo
+import io.github.helliott20.dashlink.ui.HingeSplit
+import io.github.helliott20.dashlink.ui.TwoPane
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.movableContentOf
 import io.github.helliott20.dashlink.ui.theme.Amber
 import io.github.helliott20.dashlink.ui.theme.Signage
 import io.github.helliott20.dashlink.util.Format
@@ -94,11 +99,14 @@ fun FilesTab(openRemote: (CamFile) -> Unit, openDownloads: () -> Unit, initialDe
     val c = LocalContainer.current
     val state by c.session.state.collectAsStateWithLifecycle()
     val tasks by c.downloads.tasks.collectAsStateWithLifecycle()
-    val wide = layoutInfo().wide
+    val layout = layoutInfo()
+    val wide = layout.wide
     var category by rememberSaveable { mutableStateOf<Category?>(null) }
     var lens by rememberSaveable { mutableStateOf<Lens?>(null) }
     var selected by remember { mutableStateOf(setOf<String>()) }
-    var detailPath by rememberSaveable { mutableStateOf(initialDetail) }
+    // The open clip is shared app state so it survives folding (pane <-> full-screen player).
+    LaunchedEffect(initialDetail) { if (initialDetail != null) c.ui.select(initialDetail) }
+    val detailPath by c.ui.clip.collectAsStateWithLifecycle()
     var confirmDelete by remember { mutableStateOf(false) }
 
     // Needs playback mode while visible; the session resumes recording once we leave.
@@ -111,7 +119,7 @@ fun FilesTab(openRemote: (CamFile) -> Unit, openDownloads: () -> Unit, initialDe
         if (state.connected && state.mode != CameraMode.Playback) c.session.loadFiles()
     }
     BackHandler(selected.isNotEmpty()) { selected = emptySet() }
-    BackHandler(selected.isEmpty() && wide && detailPath != null) { detailPath = null }
+    BackHandler(selected.isEmpty() && wide && detailPath != null) { c.ui.clear() }
 
     val downloaded = remember(tasks) { tasks.filter { it.state == DownloadState.Done }.map { it.name }.toSet() }
     val downloading = remember(tasks) { tasks.filter { it.isActive }.map { it.name }.toSet() }
@@ -123,6 +131,14 @@ fun FilesTab(openRemote: (CamFile) -> Unit, openDownloads: () -> Unit, initialDe
     val allByDay = remember(state.files) { state.files.groupBy { it.time?.toLocalDate() } }
     val selectedFiles = visible.filter { it.fpath in selected }
     val detail = state.files.firstOrNull { it.fpath == detailPath }
+
+    // Folded while a clip was open in the pane: carry on watching it full screen.
+    var wasWide by remember { mutableStateOf(wide) }
+    LaunchedEffect(wide) {
+        if (wasWide && !wide && detail != null) openRemote(detail)
+        wasWide = wide
+    }
+    val clipVideo = remember { movableContentOf { m: Modifier, f: CamFile -> ClipVideo(f, m) } }
 
     val list: @Composable (Modifier) -> Unit = { modifier ->
         Column(modifier) {
@@ -169,7 +185,8 @@ fun FilesTab(openRemote: (CamFile) -> Unit, openDownloads: () -> Unit, initialDe
                         if (state.files.isEmpty()) "Clips appear here once the camera has recorded something." else "Clear a filter to see more clips.",
                     )
                     else -> LazyVerticalGrid(
-                        columns = GridCells.Adaptive(150.dp),
+                        // 136dp keeps two columns even in a half-screen pane (book posture).
+                        columns = GridCells.Adaptive(136.dp),
                         contentPadding = PaddingValues(12.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -188,8 +205,8 @@ fun FilesTab(openRemote: (CamFile) -> Unit, openDownloads: () -> Unit, initialDe
                                         onClick = {
                                             when {
                                                 selected.isNotEmpty() -> selected = if (isSel) selected - f.fpath else selected + f.fpath
-                                                wide -> detailPath = f.fpath
-                                                else -> openRemote(f)
+                                                wide -> c.ui.select(f.fpath)
+                                                else -> { c.ui.select(f.fpath); openRemote(f) }
                                             }
                                         },
                                         onLongClick = { selected = selected + f.fpath },
@@ -204,22 +221,35 @@ fun FilesTab(openRemote: (CamFile) -> Unit, openDownloads: () -> Unit, initialDe
         }
     }
 
-    if (wide) {
-        // List-detail: the clip plays beside the grid instead of replacing it.
-        Row(Modifier.fillMaxSize()) {
-            list(Modifier.weight(1f).fillMaxHeight())
-            VerticalDivider()
-            Box(Modifier.weight(1f).fillMaxHeight()) {
-                if (detail != null) {
-                    val siblings = state.files.filter { it.groupKey == detail.groupKey && it.category == detail.category }
-                    ClipDetail(detail, siblings, onSelect = { detailPath = it.fpath }, onDeleted = { detailPath = null })
-                } else {
-                    EmptyState(Icons.Outlined.SmartDisplay, "Pick a clip", "It plays here, next to the list. Long-press clips to select several.")
+    val siblings = detail?.let { d -> state.files.filter { it.groupKey == d.groupKey && it.category == d.category } }.orEmpty()
+    when {
+        // Tabletop: the clip plays on the upright half; the list and its details sit on the flat half.
+        wide && layout.tabletop && detail != null -> HingeSplit(
+            layout,
+            top = { m -> clipVideo(m, detail) },
+            bottom = { m ->
+                Row(m) {
+                    list(Modifier.weight(1.4f).fillMaxHeight())
+                    VerticalDivider()
+                    ClipInfo(detail, siblings, onDeleted = { c.ui.clear() }, modifier = Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()))
                 }
-            }
-        }
-    } else {
-        list(Modifier.fillMaxSize())
+            },
+        )
+        // List-detail: the clip plays beside the grid. Half-open like a book, the split is the hinge.
+        wide -> TwoPane(
+            layout,
+            first = { m -> list(m) },
+            second = { m ->
+                Box(m) {
+                    if (detail != null) {
+                        ClipDetail(detail, siblings, video = { vm -> clipVideo(vm, detail) }, onDeleted = { c.ui.clear() })
+                    } else {
+                        EmptyState(Icons.Outlined.SmartDisplay, "Pick a clip", "It plays here, next to the list. Long-press clips to select several.")
+                    }
+                }
+            },
+        )
+        else -> list(Modifier.fillMaxSize())
     }
 
     if (confirmDelete) ConfirmDialog(

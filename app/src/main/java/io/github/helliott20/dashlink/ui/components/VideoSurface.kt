@@ -137,6 +137,7 @@ fun ClipPlayer(
     modifier: Modifier = Modifier,
     onPosition: (positionMs: Long) -> Unit = {},
     seekTo: Long? = null,
+    startPositionMs: Long = 0,
 ) {
     val context = LocalContext.current
     val container = LocalContainer.current
@@ -144,7 +145,7 @@ fun ClipPlayer(
         // Camera clips stream over the camera network; local content:// URIs work too.
         val data = DefaultDataSource.Factory(context, OkHttpDataSource.Factory(container.downloadHttp))
         ExoPlayer.Builder(context).setMediaSourceFactory(DefaultMediaSourceFactory(data)).build().apply {
-            setMediaItem(MediaItem.fromUri(uri))
+            setMediaItem(MediaItem.fromUri(uri), startPositionMs)
             playWhenReady = true
             prepare()
         }

@@ -42,6 +42,7 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffo
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -87,6 +88,12 @@ fun CameraScreen(back: () -> Unit, openRemote: (CamFile) -> Unit, openDownloads:
     // Phones go full screen when turned sideways; larger windows only when asked.
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val immersive = tab == CamTab.Live && (fullscreen || (!layout.wide && landscape))
+    // Folding or unfolding mid-full-screen: start the new screen in its normal layout.
+    var lastWide by remember { mutableStateOf(layout.wide) }
+    LaunchedEffect(layout.wide) {
+        if (lastWide != layout.wide) fullscreen = false
+        lastWide = layout.wide
+    }
     SystemBarsHidden(immersive)
 
     NavigationSuiteScaffold(

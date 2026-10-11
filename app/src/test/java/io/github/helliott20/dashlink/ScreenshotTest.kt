@@ -159,6 +159,30 @@ class ScreenshotTest {
         }
     }
 
+    // Tabletop with a clip open: it plays on the upright half, list and details on the flat half.
+    @Config(qualifiers = "w820dp-h791dp-land-night-420dpi")
+    @Test fun tabletop_files() {
+        val hingePx = (791 * 2.625 / 2).toInt()
+        shoot("unfolded_7_tabletop_files", LayoutInfo(WidthClass.Medium, tabletop = true, hingeTopPx = hingePx, hingeBottomPx = hingePx), fakeState(CameraMode.Playback)) {
+            CameraScreen({}, {}, {}, initialTab = 1, initialFile = "A:\\DCIM\\Movie\\RO\\2026_1011_134300_0005F.MP4")
+        }
+    }
+
+    // Half-open like a book: the list/detail split lands on the hinge.
+    @Config(qualifiers = "w791dp-h820dp-night-420dpi")
+    @Test fun book_files() {
+        val hingePx = (791 * 2.625 / 2).toInt()
+        shoot("unfolded_8_book_files", LayoutInfo(WidthClass.Medium, book = true, hingeLeftPx = hingePx, hingeRightPx = hingePx), fakeState(CameraMode.Playback)) {
+            CameraScreen({}, {}, {}, initialTab = 1, initialFile = "A:\\DCIM\\Movie\\2026_1011_080210_0000F.MP4")
+        }
+    }
+
+    // Split-screen next to Maps on the unfolded landscape screen: a short, wide window.
+    @Config(qualifiers = "w820dp-h395dp-land-night-420dpi")
+    @Test fun splitScreen_live() = shoot("unfolded_9_splitscreen_live", LayoutInfo(WidthClass.Medium, compactHeight = true)) {
+        CameraScreen({}, {}, {}, initialTab = 0)
+    }
+
     // ---- Quality checks ----
     @Config(qualifiers = "w411dp-h900dp-notnight-420dpi")
     @Test fun light_home() = shoot("check_light_home", phone, dark = false, devices = true) { HomeScreen({}, {}, {}, {}) }

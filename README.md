@@ -24,16 +24,23 @@ connection handling and UI are new.
 
 ## Foldables and large screens
 
-Built and checked for the Pixel 10 Pro Fold (outer 411×900 dp, inner 791×820 dp):
+Built and tested for the Pixel 10 Pro Fold (outer 411×900 dp, inner 791×820 dp):
 
 - **Navigation:** a bottom bar when folded, a side rail when unfolded.
-- **Files:** list-detail when unfolded; the clip plays next to the grid, and you can switch between front and rear in place.
+- **Files:** list-detail when unfolded; the clip plays next to the grid, and you can switch between front and rear without losing your place.
 - **Settings:** two panes when unfolded, with the section list on the left and its settings on the right.
-- **Tabletop mode:** half-fold the phone on the dashboard. Live view sits above the hinge, and the controls sit on the flat half.
-- **Full screen:** phones rotate into it; unfolded, it just hides the app chrome and system bars.
-- **Saved clips:** video and route map side by side when unfolded.
+- **Tabletop (half-folded on the dashboard):**
+  - Live view sits above the hinge, with the controls on the flat half.
+  - In Files, the open clip plays above the hinge, with the list and details below.
+  - The saved-clip player puts the video on top and the GPS map below.
+- **Book posture (half-open, hinge vertical):** two-pane screens split exactly on the hinge, so nothing is bent across it.
+- **Split-screen (e.g. next to Maps):** live view goes side by side in short windows, and the controls wrap in narrow panes.
+- **Continuity:**
+  - Folding, unfolding or changing posture never restarts live view; the stream carries straight through.
+  - A clip you're watching moves between full screen (folded) and the side pane (unfolded) and keeps playing from the same moment.
+- **Full screen:** phones rotate into it; unfolded, it hides the app chrome and system bars.
 
-Layouts are driven by window size class and fold posture (`ui/Adaptive.kt`), never by device model, so other foldables and tablets work too.
+Layouts are driven by window size class and fold posture (`ui/Adaptive.kt`, `ui/FoldLayouts.kt`), never by device model, so other foldables and tablets work too. `FoldTest` injects real hinge states through `androidx.window` to check posture detection. It also checks continuity: the live view is created once across folded → unfolded → tabletop → book → folded.
 
 ## Features
 

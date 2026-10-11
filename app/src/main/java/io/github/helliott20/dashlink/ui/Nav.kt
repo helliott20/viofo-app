@@ -73,7 +73,12 @@ fun AppNav() {
             )
         }
         composable(Routes.REMOTE, arguments = listOf(navArgument("path") { type = NavType.StringType })) { entry ->
-            RemotePlayerScreen(fpath = Uri.decode(entry.arguments?.getString("path").orEmpty()), back = { nav.popBackStack() })
+            RemotePlayerScreen(
+                fpath = Uri.decode(entry.arguments?.getString("path").orEmpty()),
+                back = { container.ui.clear(); nav.popBackStack() },
+                // Unfolded mid-clip: back to Files, which shows it in the side pane.
+                toPane = { nav.popBackStack() },
+            )
         }
         composable(Routes.LOCAL, arguments = listOf(navArgument("uri") { type = NavType.StringType })) { entry ->
             LocalPlayerScreen(uri = Uri.parse(Uri.decode(entry.arguments?.getString("uri").orEmpty())), back = { nav.popBackStack() })
