@@ -26,11 +26,6 @@ data class CamFile(
     val groupKey: String get() = name.substringBeforeLast('.').trimEnd('F', 'R', 'I', 'f', 'r', 'i', '_')
 }
 
-data class MenuOption(val index: Int, val label: String)
-
-/** A camera setting that is chosen from a list of options. */
-data class MenuItem(val cmd: Int, val name: String, val options: List<MenuOption>)
-
 data class CamInfo(
     val firmware: String?,
     val model: String?,
