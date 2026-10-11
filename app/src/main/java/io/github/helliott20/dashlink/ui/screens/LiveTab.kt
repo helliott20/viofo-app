@@ -72,10 +72,27 @@ import io.github.helliott20.dashlink.session.CameraMode
 import io.github.helliott20.dashlink.ui.LocalContainer
 import io.github.helliott20.dashlink.ui.components.LiveStream
 import io.github.helliott20.dashlink.ui.components.RecDot
+import io.github.helliott20.dashlink.ui.layoutInfo
 import io.github.helliott20.dashlink.ui.theme.RecordRed
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
+
+/** Stand-in for the camera feed in screenshot tests and previews. */
+val LocalLivePreview = androidx.compose.runtime.staticCompositionLocalOf<(@Composable (Modifier) -> Unit)?> { null }
 
 @Composable
-fun LiveTab(fullscreen: Boolean, openSettings: () -> Unit = {}, openDownloads: () -> Unit = {}) {
+fun LiveTab(
+    fullscreen: Boolean,
+    onFullscreen: (Boolean) -> Unit = {},
+    openSettings: () -> Unit = {},
+    openDownloads: () -> Unit = {},
+) {
+    val layout = layoutInfo()
     val c = LocalContainer.current
     val state by c.session.state.collectAsStateWithLifecycle()
     val prefs by c.prefs.settings.collectAsStateWithLifecycle(AppSettings())
@@ -93,14 +110,23 @@ fun LiveTab(fullscreen: Boolean, openSettings: () -> Unit = {}, openDownloads: (
     }
     // Hand orientation back to the system when leaving live view.
     DisposableEffect(Unit) { onDispose { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED } }
-    BackHandler(fullscreen) { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT }
+    // Phones rotate into full screen; unfolded and tablet windows just drop the chrome.
+    val setFullscreen: (Boolean) -> Unit = { on ->
+        if (!layout.wide) activity?.requestedOrientation =
+            if (on) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
+        onFullscreen(on)
+    }
+    BackHandler(fullscreen) { setFullscreen(false) }
 
     // Stop streaming while the app is in the background.
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     val ready = state.connected && state.mode == CameraMode.Live && lifecycle.isAtLeast(Lifecycle.State.STARTED)
     val video: @Composable (Modifier) -> Unit = { m ->
         Box(m.background(Color.Black)) {
-            if (ready) {
+            val preview = LocalLivePreview.current
+            if (preview != null) {
+                preview(Modifier.fillMaxSize())
+            } else if (ready) {
                 // Re-keyed on liveToken so the stream re-opens when the camera set changes.
                 key(state.liveToken, state.liveUrl) { LiveStream(state.liveUrl, prefs.rtspOverTcp, Modifier.fillMaxSize()) }
             } else {
@@ -116,37 +142,66 @@ fun LiveTab(fullscreen: Boolean, openSettings: () -> Unit = {}, openDownloads: (
                 }
             }
             if (fullscreen) {
-                RecDot(state.recording, Modifier.align(Alignment.TopStart).padding(16.dp))
-                Row(Modifier.align(Alignment.CenterEnd).padding(16.dp)) { Controls(vertical = true) }
+                RecDot(state.recording, Modifier.align(Alignment.TopStart).windowInsetsPadding(WindowInsets.safeDrawing).padding(16.dp))
+                Row(Modifier.align(Alignment.CenterEnd).windowInsetsPadding(WindowInsets.safeDrawing).padding(16.dp)) {
+                    Controls(vertical = true, fullscreen = true, onFullscreen = setFullscreen)
+                }
             }
         }
     }
 
-    if (fullscreen) {
-        video(Modifier.fillMaxSize())
-        return
+    when {
+        fullscreen -> video(Modifier.fillMaxSize())
+        layout.tabletop && layout.hingeTopPx != null -> TabletopLive(layout.hingeTopPx, layout.hingeBottomPx ?: layout.hingeTopPx, video) {
+            Controls(vertical = false, fullscreen = false, onFullscreen = setFullscreen)
+            Spacer(Modifier.height(16.dp))
+            AtAGlance(openSettings)
+        }
+        layout.wide -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            video(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+            Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { Controls(vertical = false, fullscreen = false, onFullscreen = setFullscreen) }
+                Box(Modifier.weight(1f)) { AtAGlance(openSettings, horizontalPadding = 0.dp) }
+            }
+        }
+        else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            video(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+            Spacer(Modifier.height(20.dp))
+            Controls(vertical = false, fullscreen = false, onFullscreen = setFullscreen)
+            Spacer(Modifier.height(20.dp))
+            AtAGlance(openSettings)
+            Spacer(Modifier.height(16.dp))
+        }
     }
+}
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        video(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
-        Spacer(Modifier.height(20.dp))
-        Controls(vertical = false)
-        Spacer(Modifier.height(20.dp))
-        AtAGlance(openSettings)
-        Spacer(Modifier.height(16.dp))
+/**
+ * Half-folded on a dashboard or desk: the picture fills the upright half above the hinge,
+ * controls sit on the flat half below it, where thumbs can reach them.
+ */
+@Composable
+private fun TabletopLive(hingeTopPx: Int, hingeBottomPx: Int, video: @Composable (Modifier) -> Unit, below: @Composable () -> Unit) {
+    val density = LocalDensity.current
+    var topInWindow by remember { mutableIntStateOf(0) }
+    Column(Modifier.fillMaxSize().onGloballyPositioned { topInWindow = it.positionInWindow().y.toInt() }) {
+        val upper = with(density) { (hingeTopPx - topInWindow).coerceAtLeast(0).toDp() }
+        val gap = with(density) { (hingeBottomPx - hingeTopPx).coerceAtLeast(0).toDp() }
+        video(Modifier.fillMaxWidth().height(upper))
+        Spacer(Modifier.height(gap))
+        Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(top = 16.dp)) { below() }
     }
 }
 
 /** A few key settings, readable at a glance; tap through to change them. */
 @Composable
-private fun AtAGlance(openSettings: () -> Unit) {
+private fun AtAGlance(openSettings: () -> Unit, horizontalPadding: androidx.compose.ui.unit.Dp = 16.dp) {
     val state by LocalContainer.current.session.state.collectAsStateWithLifecycle()
     val views = state.settings.associateBy { it.def.key }
     val rows = listOf("resolution" to "Resolution", "parking" to "Parking mode", "gsensor" to "G-sensor", "cyclic" to "Loop length")
         .mapNotNull { (k, label) -> views[k]?.let { v -> label to (v.selected?.let { i -> v.options[i] } ?: "—") } }
     if (rows.isEmpty()) return
     Card(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp).clip(RoundedCornerShape(20.dp)).clickable(onClick = openSettings),
+        Modifier.fillMaxWidth().padding(horizontal = horizontalPadding).clip(RoundedCornerShape(20.dp)).clickable(onClick = openSettings),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
@@ -166,10 +221,9 @@ private fun AtAGlance(openSettings: () -> Unit) {
 }
 
 @Composable
-private fun Controls(vertical: Boolean) {
+private fun Controls(vertical: Boolean, fullscreen: Boolean, onFullscreen: (Boolean) -> Unit) {
     val c = LocalContainer.current
     val state by c.session.state.collectAsStateWithLifecycle()
-    val activity = LocalContext.current as? Activity
     var pipMenu by remember { mutableStateOf(false) }
     val recording = state.recording == true
     val recColor by animateColorAsState(if (recording) RecordRed else MaterialTheme.colorScheme.surfaceContainerHighest, label = "rec")
@@ -213,8 +267,8 @@ private fun Controls(vertical: Boolean) {
         },
         { Small(Icons.Outlined.CameraAlt, "Snapshot", { c.session.takeSnapshot() }) },
         {
-            Small(if (vertical) Icons.Outlined.FullscreenExit else Icons.Outlined.Fullscreen, if (vertical) "Exit" else "Full screen", {
-                activity?.requestedOrientation = if (vertical) ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            Small(if (fullscreen) Icons.Outlined.FullscreenExit else Icons.Outlined.Fullscreen, if (fullscreen) "Exit full screen" else "Full screen", {
+                onFullscreen(!fullscreen)
             }, needsCamera = false)
         },
     )

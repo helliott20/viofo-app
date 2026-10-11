@@ -22,6 +22,19 @@ connection handling and UI are new.
 | **GPS playback** | Uses Chinese map offsets | Plain WGS‑84 on OpenStreetMap, speed overlay in mph or km/h, no API key |
 | **Size** | ~32 MB | ~3 MB |
 
+## Foldables and large screens
+
+Built and checked for the Pixel 10 Pro Fold (outer 411×900 dp, inner 791×820 dp):
+
+- **Navigation:** a bottom bar when folded, a side rail when unfolded.
+- **Files:** list-detail when unfolded; the clip plays next to the grid, and you can switch between front and rear in place.
+- **Settings:** two panes when unfolded, with the section list on the left and its settings on the right.
+- **Tabletop mode:** half-fold the phone on the dashboard. Live view sits above the hinge, and the controls sit on the flat half.
+- **Full screen:** phones rotate into it; unfolded, it just hides the app chrome and system bars.
+- **Saved clips:** video and route map side by side when unfolded.
+
+Layouts are driven by window size class and fold posture (`ui/Adaptive.kt`), never by device model, so other foldables and tablets work too.
+
 ## Features
 
 - **Live view**: record/stop, snapshot, microphone toggle, front/rear/interior/PiP switching, full screen on rotate
@@ -29,6 +42,7 @@ connection handling and UI are new.
 - **Settings**: resolution, loop length, HDR/WDR, exposure, bitrate, G-sensor, parking mode and timers, GPS and stamps, car number and custom text, time zone, beep/voice, Wi‑Fi band, camera Wi‑Fi name/password, clock sync, format SD, reset, restart
 - **Saved clips**: downloaded videos with GPS route map, live speed readout, and sharing
 - **Multiple cameras** remembered, with optional auto-connect on launch
+- **Day timeline**: above each day's clips, a 24-hour strip shows when the camera was recording; event clips are amber, parking clips are blue
 
 ## Install / build
 
@@ -38,7 +52,8 @@ The build output is `app/build/outputs/apk/release/app-release.apk`. It is signe
 # needs JDK 17+ and the Android SDK (platform 35)
 echo "sdk.dir=/path/to/android-sdk" > local.properties
 ./gradlew assembleRelease          # or assembleDebug
-./gradlew testDebugUnitTest        # unit + Robolectric tests, writes UI screenshots to app/build/screenshots
+./gradlew testDebugUnitTest        # unit + Robolectric tests; writes screenshots for folded,
+                                   # unfolded, tabletop, light theme and 130% text to app/build/screenshots
 ```
 
 Minimum Android 8.0. Android 10+ is needed for the app to join the camera Wi‑Fi itself; on older phones, join it in Wi‑Fi settings and tap **Already on camera Wi‑Fi**.
@@ -69,3 +84,7 @@ Protocol notes:
 - **No OTA firmware updates.** The settings screen shows the firmware version; update from viofo.com via the SD card.
 - **Resolution is read-only on some models.** On the A229 Plus/Pro/Duo and A329/A339 it is shown but must be changed on the camera, because their option mappings couldn't be verified.
 - **GPS may not show for some clips.** Newer firmware may store GPS in a format this parser doesn't read yet; those clips play normally without a route.
+
+## Credits
+
+Titles and numbers are set in [Barlow Semi Condensed](https://github.com/jpt/barlow) (SIL Open Font License 1.1; the licence ships in `app/src/main/assets/licenses/`).

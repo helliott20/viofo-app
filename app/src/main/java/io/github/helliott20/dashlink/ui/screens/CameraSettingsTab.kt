@@ -54,6 +54,27 @@ import io.github.helliott20.dashlink.ui.LocalContainer
 import io.github.helliott20.dashlink.ui.components.ConfirmDialog
 import io.github.helliott20.dashlink.ui.components.SectionHeader
 import io.github.helliott20.dashlink.util.Format
+import io.github.helliott20.dashlink.ui.layoutInfo
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.CameraAlt
+import androidx.compose.material.icons.outlined.LocalParking
+import androidx.compose.material.icons.outlined.Place
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Videocam
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.graphics.Color
+
+private fun Group.icon(): ImageVector = when (this) {
+    Group.Video -> Icons.Outlined.Videocam
+    Group.Parking -> Icons.Outlined.LocalParking
+    Group.Stamps -> Icons.Outlined.Place
+    Group.Camera -> Icons.Outlined.CameraAlt
+    Group.System -> Icons.Outlined.Tune
+}
 
 @Composable
 fun CameraSettingsTab() {
@@ -68,47 +89,81 @@ fun CameraSettingsTab() {
     LaunchedEffect(state.connected) { if (state.connected) s.refreshValues() }
 
     val views = state.settings
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp), state = rememberLazyListState()) {
-        if (state.model == null && state.connected) item {
-            Surface(Modifier.fillMaxWidth().padding(16.dp), shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
-                Text("This camera (${state.firmware ?: "unknown firmware"}) isn't in DashLink's model list, so only basic controls are available.", Modifier.padding(16.dp))
-            }
-        }
+    val enabled = state.connected && !state.busy
+
+    // Each section renders as a plain column of rows; the layout below decides where they go.
+    data class Section(val title: String, val icon: ImageVector, val content: @Composable () -> Unit)
+    val sections = buildList {
         Group.entries.forEach { g ->
             val inGroup = views.filter { it.def.group == g }
             val extras = g == Group.Stamps && state.model != null
             if (inGroup.isEmpty() && !extras) return@forEach
-            item(key = "g$g") { SectionHeader(g.title) }
-            itemsIndexed(inGroup, key = { _, v -> "s${v.def.key}" }) { _, v ->
-                SettingRow(v, enabled = state.connected && !state.busy, onChoose = { choosing = v }, onSwitch = { s.applySwitch(v, it) })
-            }
-            if (extras) {
-                item(key = "car") {
-                    Row2(Icons.Outlined.TextFields, "Car number stamp", state.carNumber?.ifEmpty { "Off" } ?: "—") { textEdit = (state.carNumber.orEmpty()) to true }
+            add(Section(g.title, g.icon()) {
+                Column {
+                    inGroup.forEach { v -> SettingRow(v, enabled = enabled, onChoose = { choosing = v }, onSwitch = { s.applySwitch(v, it) }) }
+                    if (extras) {
+                        Row2(Icons.Outlined.TextFields, "Number plate stamp", state.carNumber?.ifEmpty { "Off" } ?: "—") { textEdit = (state.carNumber.orEmpty()) to true }
+                        Row2(Icons.Outlined.TextFields, "Custom text stamp", state.customStamp?.ifEmpty { "Off" } ?: "—") { textEdit = (state.customStamp.orEmpty()) to false }
+                    }
                 }
-                item(key = "stamp") {
-                    Row2(Icons.Outlined.TextFields, "Custom text stamp", state.customStamp?.ifEmpty { "Off" } ?: "—") { textEdit = (state.customStamp.orEmpty()) to false }
+            })
+        }
+        add(Section("Wi-Fi", Icons.Outlined.Wifi) {
+            Row2(Icons.Outlined.Wifi, "Camera Wi-Fi", state.wifiSsid ?: state.ssid ?: "—") { wifiEdit = true }
+        })
+        add(Section("Maintenance", Icons.Outlined.Build) {
+            Column {
+                Row2(Icons.Outlined.AccessTime, "Sync clock with phone", "Sets the camera's date and time") { s.syncClock() }
+                Row2(Icons.Outlined.SdCard, "Format SD card", state.freeBytes?.let { "${Format.bytes(it)} free. Erases every recording." } ?: "Erases every recording") { confirm = "format" }
+                Row2(Icons.Outlined.RestartAlt, "Restart camera", "DashLink reconnects automatically") { confirm = "restart" }
+                Row2(Icons.Outlined.SettingsBackupRestore, "Reset settings", "Back to factory defaults; recordings are kept") { confirm = "reset" }
+            }
+        })
+        add(Section("About this camera", Icons.Outlined.Info) {
+            ListItem(
+                headlineContent = { Text(state.modelName?.let { "VIOFO $it" } ?: "Unknown model") },
+                supportingContent = { Text("Firmware ${state.firmware ?: "unknown"}. Firmware updates are installed from viofo.com via the SD card.") },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            )
+        })
+    }
+    val unknownModel: @Composable () -> Unit = {
+        if (state.model == null && state.connected) {
+            Surface(Modifier.fillMaxWidth().padding(16.dp), shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
+                Text("DashLink doesn't recognise this camera (${state.firmware ?: "unknown firmware"}), so only basic controls are shown.", Modifier.padding(16.dp))
+            }
+        }
+    }
+
+    if (layoutInfo().wide) {
+        var current by rememberSaveable { mutableIntStateOf(0) }
+        val index = current.coerceIn(0, (sections.size - 1).coerceAtLeast(0))
+        Row(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.width(280.dp).fillMaxHeight(), contentPadding = PaddingValues(12.dp)) {
+                itemsIndexed(sections) { i, sec ->
+                    NavigationDrawerItem(
+                        label = { Text(sec.title) }, icon = { Icon(sec.icon, null) },
+                        selected = i == index, onClick = { current = i },
+                        modifier = Modifier.padding(vertical = 2.dp),
+                    )
+                }
+            }
+            VerticalDivider()
+            LazyColumn(Modifier.weight(1f).fillMaxHeight(), contentPadding = PaddingValues(bottom = 24.dp)) {
+                item { unknownModel() }
+                sections.getOrNull(index)?.let { sec ->
+                    item(key = "h${sec.title}") { SectionHeader(sec.title) }
+                    item(key = "c${sec.title}") { sec.content() }
                 }
             }
         }
-
-        item { SectionHeader("Wi-Fi") }
-        item { Row2(Icons.Outlined.Wifi, "Camera Wi-Fi", state.wifiSsid ?: state.ssid ?: "—") { wifiEdit = true } }
-
-        item { SectionHeader("Maintenance") }
-        item { Row2(Icons.Outlined.AccessTime, "Sync clock with phone", "Sets the camera's date and time") { s.syncClock() } }
-        item { Row2(Icons.Outlined.SdCard, "Format SD card", state.freeBytes?.let { "${Format.bytes(it)} free" } ?: "Erase all recordings") { confirm = "format" } }
-        item { Row2(Icons.Outlined.RestartAlt, "Restart camera", "Reboots the dashcam; it'll reconnect automatically") { confirm = "restart" } }
-        item { Row2(Icons.Outlined.SettingsBackupRestore, "Reset settings", "Restore factory defaults") { confirm = "reset" } }
-
-        item { SectionHeader("About this camera") }
-        item {
-            ListItem(
-                leadingContent = { Icon(Icons.Outlined.Info, null) },
-                headlineContent = { Text(state.modelName?.let { "VIOFO $it" } ?: "Unknown model") },
-                supportingContent = { Text("Firmware ${state.firmware ?: "unknown"}\nCheck viofo.com for firmware updates.") },
-                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background),
-            )
+    } else {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+            item { unknownModel() }
+            sections.forEach { sec ->
+                item(key = "h${sec.title}") { SectionHeader(sec.title) }
+                item(key = "c${sec.title}") { sec.content() }
+            }
         }
     }
 
@@ -149,7 +204,7 @@ private fun SettingRow(v: SettingView, enabled: Boolean, onChoose: () -> Unit, o
             if (lines.isNotEmpty()) Text(lines.joinToString("\n"), color = if (value != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
         },
         trailingContent = if (v.def.kind == Kind.Switch) { { Switch(v.switchOn, onSwitch, enabled = enabled) } } else null,
-        colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background),
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
     )
 }
 
@@ -160,7 +215,7 @@ private fun Row2(icon: ImageVector, title: String, subtitle: String, onClick: ()
         leadingContent = { Icon(icon, null) },
         headlineContent = { Text(title) },
         supportingContent = { Text(subtitle) },
-        colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background),
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
     )
 }
 

@@ -39,6 +39,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import android.provider.Settings
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -57,15 +61,19 @@ fun SessionSnackbars(host: SnackbarHostState) {
 @Composable
 fun RecDot(recording: Boolean?, modifier: Modifier = Modifier) {
     if (recording != true) return
+    // Honour "Remove animations": a steady dot instead of a pulse.
+    val context = LocalContext.current
+    val animate = remember { Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f }
     val t = rememberInfiniteTransition(label = "rec")
-    val a by t.animateFloat(1f, 0.25f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "recAlpha")
+    val pulse by t.animateFloat(1f, 0.25f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "recAlpha")
+    val a = if (animate) pulse else 1f
     Row(
         modifier.clip(RoundedCornerShape(6.dp)).background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(8.dp).alpha(a).clip(CircleShape).background(RecordRed))
         Spacer(Modifier.width(6.dp))
-        Text("REC", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+        Text("REC", color = Color.White, style = MaterialTheme.typography.labelMedium, fontFamily = io.github.helliott20.dashlink.ui.theme.Signage, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -82,11 +90,10 @@ fun Pill(text: String, modifier: Modifier = Modifier, icon: ImageVector? = null,
 @Composable
 fun SectionHeader(text: String, modifier: Modifier = Modifier) {
     Text(
-        text.uppercase(),
-        modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 8.dp),
-        style = MaterialTheme.typography.labelLarge,
+        text,
+        modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 4.dp).semantics { heading() },
+        style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.primary,
-        fontWeight = FontWeight.SemiBold,
     )
 }
 

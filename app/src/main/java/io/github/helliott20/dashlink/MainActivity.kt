@@ -9,6 +9,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.helliott20.dashlink.data.AppSettings
 import io.github.helliott20.dashlink.api.Settings
 import io.github.helliott20.dashlink.ui.AppNav
 import io.github.helliott20.dashlink.ui.LocalContainer
@@ -18,13 +21,17 @@ class MainActivity : ComponentActivity() {
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT),
+        )
         super.onCreate(savedInstanceState)
         Settings.load(this)
         requestRuntimePermissions()
         val container = (application as App).container
         setContent {
-            DashLinkTheme {
+            val prefs by container.prefs.settings.collectAsStateWithLifecycle(AppSettings())
+            DashLinkTheme(dynamic = prefs.dynamicColor) {
                 CompositionLocalProvider(LocalContainer provides container) {
                     AppNav()
                 }

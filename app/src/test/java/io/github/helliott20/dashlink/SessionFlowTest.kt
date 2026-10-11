@@ -126,6 +126,8 @@ class SessionFlowTest {
 
         // Safety net puts the camera into live mode on its own.
         waitFor(what = "live") { session.state.value.mode == CameraMode.Live }
+        // Live mode finishes with a status refresh; let it land before the next phase.
+        waitFor(what = "live settled") { synchronized(log) { log.indexOf("2019").let { i -> i >= 0 && log.drop(i).contains("3014") } } }
         assertTrue(log.contains("2015 par=1") && log.contains("2019"))
 
         // Browsing: stop recording, then playback mode, then list.
@@ -149,6 +151,7 @@ class SessionFlowTest {
     @Test fun settingChangePausesAndResumesRecording() {
         session.startHandshake("VIOFO-A139P-TEST")
         waitFor(what = "live") { session.state.value.mode == CameraMode.Live }
+        waitFor(what = "live settled") { synchronized(log) { log.indexOf("2019").let { i -> i >= 0 && log.drop(i).contains("3014") } } }
         log.clear()
         val loop = session.state.value.settings.single { it.def.key == "cyclic" }
         session.applySetting(loop, 4)

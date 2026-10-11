@@ -181,6 +181,8 @@ fun AppSettingsScreen(back: () -> Unit) {
         )
     }) { pad ->
         LazyColumn(Modifier.fillMaxSize().padding(pad)) {
+            item { SectionHeader("Appearance") }
+            item { Toggle("Use wallpaper colours", "Material You colours instead of DashLink amber (Android 12+)", s.dynamicColor) { v -> set { it.copy(dynamicColor = v) } } }
             item { SectionHeader("Connection") }
             item { Toggle("Auto-connect on launch", "Reconnect to the last camera when the app opens", s.autoConnectLast) { v -> set { it.copy(autoConnectLast = v) } } }
             item { Toggle("Sync camera clock", "Set the camera's date and time from the phone on every connect", s.syncClockOnConnect) { v -> set { it.copy(syncClockOnConnect = v) } } }

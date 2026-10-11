@@ -81,6 +81,15 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.helliott20.dashlink.api.NovatekClient
+import io.github.helliott20.dashlink.data.LocalClip
+import io.github.helliott20.dashlink.data.LocalMedia
+import io.github.helliott20.dashlink.ui.layoutInfo
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import io.github.helliott20.dashlink.data.SavedDevice
 import io.github.helliott20.dashlink.session.Phase
 import io.github.helliott20.dashlink.session.SessionState
@@ -92,7 +101,7 @@ import io.github.helliott20.dashlink.util.Format
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(openCamera: () -> Unit, openLibrary: () -> Unit, openDownloads: () -> Unit, openSettings: () -> Unit) {
     val c = LocalContainer.current
@@ -136,30 +145,24 @@ fun HomeScreen(openCamera: () -> Unit, openLibrary: () -> Unit, openDownloads: (
         },
         snackbarHost = { SnackbarHost(snack) },
     ) { pad ->
-        LazyColumn(Modifier.fillMaxSize().padding(pad), contentPadding = PaddingValues(bottom = 32.dp)) {
-            item {
-                ConnectionCard(
-                    state = state,
-                    last = devices.firstOrNull(),
-                    onConnect = { c.session.connect(it) },
-                    onOpen = openCamera,
-                    onCancel = { c.session.disconnect() },
-                    onRetry = { devices.firstOrNull { it.ssid == state.ssid }?.let { c.session.connect(it) } ?: c.session.connectCurrentWifi() },
-                    onAdd = { showAdd = true },
-                )
-            }
-            item {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    QuickTile(Icons.Outlined.VideoLibrary, "Saved clips", "On this phone", Modifier.weight(1f), openLibrary)
-                    QuickTile(Icons.Outlined.Download, "Downloads", tasks.count { it.isActive }.let { if (it > 0) "$it in progress" else "Queue & history" }, Modifier.weight(1f), openDownloads)
-                }
-            }
+        val connection: @Composable () -> Unit = {
+            ConnectionCard(
+                state = state,
+                last = devices.firstOrNull(),
+                onConnect = { c.session.connect(it) },
+                onOpen = openCamera,
+                onCancel = { c.session.disconnect() },
+                onRetry = { devices.firstOrNull { it.ssid == state.ssid }?.let { c.session.connect(it) } ?: c.session.connectCurrentWifi() },
+                onAdd = { showAdd = true },
+            )
+        }
+        val cameras: LazyListScope.() -> Unit = {
             item { SectionHeader("My cameras") }
             if (devices.isEmpty()) {
                 item {
                     Text(
-                        "No cameras yet. Tip: the camera's Wi-Fi name and password are shown on its screen when you switch Wi-Fi on (default password ${NovatekClient.DEFAULT_PASSWORD}).",
-                        Modifier.padding(horizontal = 20.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        "When you switch the camera's Wi-Fi on, its screen shows the network name and password (the default password is ${NovatekClient.DEFAULT_PASSWORD}).",
+                        Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -172,10 +175,27 @@ fun HomeScreen(openCamera: () -> Unit, openLibrary: () -> Unit, openDownloads: (
                 )
             }
             item {
-                Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Wraps whole buttons onto a new line rather than wrapping their labels.
+                FlowRow(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (devices.isNotEmpty()) FilledTonalButton(onClick = { showAdd = true }) { Icon(Icons.Rounded.Add, null); Spacer(Modifier.width(6.dp)); Text("Add camera") }
                     OutlinedButton(onClick = { c.session.connectCurrentWifi() }) { Text("Already on camera Wi-Fi") }
                 }
+            }
+        }
+        if (layoutInfo().wide) {
+            // Unfolded: connection and saved clips on the left, the camera list on the right.
+            Row(Modifier.fillMaxSize().padding(pad).padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 32.dp)) {
+                    item { connection() }
+                    item { SavedClipsStrip(openLibrary) }
+                }
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(top = 8.dp, bottom = 32.dp)) { cameras() }
+            }
+        } else {
+            LazyColumn(Modifier.fillMaxSize().padding(pad), contentPadding = PaddingValues(bottom = 32.dp)) {
+                item { connection() }
+                item { SavedClipsStrip(openLibrary) }
+                cameras()
             }
         }
     }
@@ -219,8 +239,8 @@ private fun ConnectionCard(
             Column(Modifier.padding(20.dp)) {
                 when (phase) {
                     Phase.Disconnected -> {
-                        HeroIcon(Icons.Outlined.Videocam)
-                        Text("Not connected", style = MaterialTheme.typography.titleLarge)
+                        Text("Not connected", style = MaterialTheme.typography.headlineSmall)
+                        Spacer(Modifier.height(4.dp))
                         Text(
                             if (last == null) "Switch on your dashcam's Wi-Fi, then add it here. DashLink joins the camera's Wi-Fi for you and keeps your mobile data working."
                             else "Make sure the camera is on with Wi-Fi enabled. DashLink joins it for you and keeps your mobile data working.",
@@ -263,9 +283,9 @@ private fun ConnectionCard(
                             Icon(Icons.Rounded.CheckCircle, null, tint = OkGreen, modifier = Modifier.size(28.dp))
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(state.modelName?.let { "VIOFO $it" } ?: (state.ssid ?: "Camera"), style = MaterialTheme.typography.titleLarge)
+                                Text(state.modelName?.let { "VIOFO $it" } ?: (state.ssid ?: "Camera"), style = MaterialTheme.typography.headlineSmall)
                                 Text(
-                                    listOfNotNull("Connected", state.freeBytes?.let { "${Format.bytes(it)} free" }, if (state.recording == true) "Recording" else null).joinToString(" · "),
+                                    (if (state.recording == true) "Connected and recording" else "Connected") + (state.freeBytes?.let { ". ${Format.bytes(it)} free on SD card." } ?: ""),
                                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
@@ -277,8 +297,12 @@ private fun ConnectionCard(
                         }
                     }
                     Phase.Failed -> {
-                        HeroIcon(Icons.Outlined.ErrorOutline, MaterialTheme.colorScheme.error)
-                        Text("Couldn't connect", style = MaterialTheme.typography.titleLarge)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.ErrorOutline, null, tint = MaterialTheme.colorScheme.error)
+                            Spacer(Modifier.width(10.dp))
+                            Text("Couldn't connect", style = MaterialTheme.typography.headlineSmall)
+                        }
+                        Spacer(Modifier.height(4.dp))
                         Text(state.message ?: "Unknown error", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.height(12.dp))
                         Text(
@@ -297,24 +321,35 @@ private fun ConnectionCard(
     }
 }
 
+/** Recently saved clips as thumbnails; the library is about content, so show some. */
 @Composable
-private fun HeroIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, tint: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary) {
-    Box(Modifier.size(52.dp).clip(CircleShape).padding(0.dp), contentAlignment = Alignment.Center) {
-        Surface(shape = CircleShape, color = tint.copy(alpha = 0.15f), modifier = Modifier.size(52.dp)) {
-            Box(contentAlignment = Alignment.Center) { Icon(icon, null, tint = tint, modifier = Modifier.size(28.dp)) }
+private fun SavedClipsStrip(openLibrary: () -> Unit) {
+    val context = LocalContext.current
+    val tasks by LocalContainer.current.downloads.tasks.collectAsStateWithLifecycle()
+    val doneCount = tasks.count { it.state == io.github.helliott20.dashlink.data.DownloadState.Done }
+    var clips by remember { mutableStateOf<List<LocalClip>>(emptyList()) }
+    LaunchedEffect(doneCount) { clips = runCatching { LocalMedia.list(context) }.getOrDefault(emptyList()) }
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().padding(end = 4.dp), verticalAlignment = Alignment.Bottom) {
+            SectionHeader("Saved on this phone", Modifier.weight(1f))
+            if (clips.isNotEmpty()) TextButton(onClick = openLibrary) { Text("See all ${clips.size}") }
         }
-    }
-    Spacer(Modifier.height(12.dp))
-}
-
-@Composable
-private fun QuickTile(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, modifier: Modifier, onClick: () -> Unit) {
-    Card(modifier.clickable(onClick = onClick), shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(Modifier.padding(16.dp)) {
-            Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.height(10.dp))
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (clips.isEmpty()) {
+            Text(
+                "Clips you download from the camera land here and in your gallery.",
+                Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(clips.take(8), key = { it.uri.toString() }) { clip ->
+                    coil.compose.AsyncImage(
+                        clip.uri, clip.name,
+                        Modifier.width(140.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHighest).clickable(onClick = openLibrary),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    )
+                }
+            }
         }
     }
 }
@@ -329,12 +364,22 @@ private fun DeviceRow(d: SavedDevice, active: Boolean, onClick: () -> Unit, onFo
         color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
     ) {
         Row(Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(if (active) Icons.Outlined.Wifi else Icons.Outlined.WifiFind, null, tint = MaterialTheme.colorScheme.primary)
+            Icon(
+                if (active) Icons.Outlined.Wifi else Icons.Outlined.Videocam, null,
+                tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
                 Text(d.model?.let { "VIOFO $it" } ?: d.ssid, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    listOfNotNull(d.ssid.takeIf { d.model != null }, d.lastConnected.takeIf { it > 0 }?.let { "last used " + DateUtils.getRelativeTimeSpanString(it) }).joinToString(" · "),
+                    when {
+                        active -> "Connected"
+                        d.lastConnected > 0 -> DateUtils.getRelativeTimeSpanString(d.lastConnected).toString().let { rel ->
+                            // "Last used 2 hours ago" / "Last used yesterday" / "Last used Oct 2, 2026"
+                            "Last used " + if (rel.startsWith("Yesterday") || rel.startsWith("Today")) rel.lowercase() else rel
+                        }
+                        else -> d.ssid
+                    },
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }

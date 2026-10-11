@@ -25,6 +25,7 @@ data class AppSettings(
     val autoConnectLast: Boolean = true,
     val keepScreenOnLive: Boolean = true,
     val speedMph: Boolean = defaultMph(),
+    val dynamicColor: Boolean = false,
 )
 
 /** Countries that drive in miles per hour. */
@@ -39,6 +40,7 @@ class Prefs(private val context: Context) {
         val autoConnect = booleanPreferencesKey("auto_connect")
         val keepScreenOn = booleanPreferencesKey("keep_screen_on")
         val mph = booleanPreferencesKey("speed_mph")
+        val dynamic = booleanPreferencesKey("dynamic_color")
     }
 
     val devices: Flow<List<SavedDevice>> = context.dataStore.data.map { decode(it[K.devices].orEmpty()) }
@@ -51,6 +53,7 @@ class Prefs(private val context: Context) {
             autoConnectLast = it[K.autoConnect] ?: true,
             keepScreenOnLive = it[K.keepScreenOn] ?: true,
             speedMph = it[K.mph] ?: defaultMph(),
+            dynamicColor = it[K.dynamic] ?: false,
         )
     }
 
@@ -66,7 +69,7 @@ class Prefs(private val context: Context) {
     suspend fun update(transform: (AppSettings) -> AppSettings) = context.dataStore.edit { p ->
         val cur = AppSettings(
             p[K.syncClock] ?: true, p[K.resumeRec] ?: true, p[K.rtspTcp] ?: false,
-            p[K.autoConnect] ?: true, p[K.keepScreenOn] ?: true, p[K.mph] ?: defaultMph(),
+            p[K.autoConnect] ?: true, p[K.keepScreenOn] ?: true, p[K.mph] ?: defaultMph(), p[K.dynamic] ?: false,
         )
         val n = transform(cur)
         p[K.syncClock] = n.syncClockOnConnect
@@ -75,6 +78,7 @@ class Prefs(private val context: Context) {
         p[K.autoConnect] = n.autoConnectLast
         p[K.keepScreenOn] = n.keepScreenOnLive
         p[K.mph] = n.speedMph
+        p[K.dynamic] = n.dynamicColor
     }
 
     // Line/field separated with control chars that can't appear in an SSID or WPA passphrase.
