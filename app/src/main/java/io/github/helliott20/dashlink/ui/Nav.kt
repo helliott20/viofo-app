@@ -11,9 +11,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import io.github.helliott20.dashlink.session.CameraMode
 import androidx.navigation.navArgument
 import io.github.helliott20.dashlink.AppContainer
 import io.github.helliott20.dashlink.session.Phase
@@ -44,15 +42,6 @@ fun AppNav() {
     val nav = rememberNavController()
     val container = LocalContainer.current
     val state by container.session.state.collectAsStateWithLifecycle()
-
-    // Leaving the camera screens while it's in playback mode: put it back to recording.
-    val entry by nav.currentBackStackEntryAsState()
-    val route = entry?.destination?.route
-    LaunchedEffect(route, state.mode) {
-        if (route != null && route != Routes.CAMERA && route != Routes.REMOTE && state.mode == CameraMode.Playback && state.connected) {
-            container.session.enterLive()
-        }
-    }
 
     // Drop back to home if the connection is lost for good while on a camera screen.
     LaunchedEffect(state.phase) {

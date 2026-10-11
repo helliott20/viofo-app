@@ -5,6 +5,7 @@ import io.github.helliott20.dashlink.api.NovatekClient
 import io.github.helliott20.dashlink.data.Downloads
 import io.github.helliott20.dashlink.data.Prefs
 import io.github.helliott20.dashlink.net.CameraLink
+import io.github.helliott20.dashlink.net.CameraSocketFactory
 import io.github.helliott20.dashlink.session.CameraSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,8 +18,14 @@ import java.util.concurrent.TimeUnit
 class AppContainer(context: Context) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+    val link = CameraLink(context, scope)
+
+    /** All camera sockets are created on the camera's Wi-Fi network. */
+    val cameraSockets = CameraSocketFactory { link.boundNetwork }
+
     /** Commands: short timeouts so a dead link is noticed quickly. */
     val commandHttp: OkHttpClient = OkHttpClient.Builder()
+        .socketFactory(cameraSockets)
         .connectTimeout(4, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS) // file list on a full card can be slow
         .retryOnConnectionFailure(true)
@@ -39,8 +46,13 @@ class AppContainer(context: Context) {
         .build()
 
     val prefs = Prefs(context)
-    val link = CameraLink(context, scope)
+
+    /** Auto-connect happens once per app launch, never again after a manual disconnect. */
+    var autoConnectDone = false
     val client = NovatekClient(commandHttp)
     val downloads = Downloads(context, downloadHttp, scope)
-    val session = CameraSession(link, client, prefs, downloads, scope)
+    val session = CameraSession(link, client, prefs, downloads, scope, cameraSockets) {
+        // New network: sockets pooled on the old one are dead.
+        listOf(commandHttp, downloadHttp, thumbHttp).forEach { it.connectionPool.evictAll() }
+    }
 }

@@ -23,10 +23,10 @@ import kotlinx.coroutines.launch
 /**
  * Owns the Wi-Fi link to the dashcam.
  *
- * The camera's access point has no internet, so modern Android happily keeps routing
- * traffic over mobile data — the #1 cause of "can't connect" in the stock app. We fix
- * that by binding the whole process to the camera network once it is up, so every
- * socket (OkHttp, ExoPlayer RTSP, Coil) goes to the camera.
+ * The camera's access point has no internet, so Android keeps routing traffic over mobile
+ * data — the #1 cause of "can't connect" in the stock app. We hand out the camera
+ * [Network] so that camera sockets are created on it explicitly (see CameraSocketFactory),
+ * while the rest of the phone's traffic carries on over its normal connection.
  */
 class CameraLink(context: Context, private val scope: CoroutineScope) {
 
@@ -123,16 +123,12 @@ class CameraLink(context: Context, private val scope: CoroutineScope) {
 
     private fun onNetworkUp(network: Network, ssid: String?) {
         timeoutJob?.cancel()
-        cm.bindProcessToNetwork(network)
-        Log.i(TAG, "Bound to camera network $network ($ssid)")
+        Log.i(TAG, "Camera network available: $network ($ssid)")
         _state.value = State.Connected(ssid ?: currentSsid(network), network)
     }
 
     private fun onNetworkLost(network: Network) {
-        if (boundNetwork == network) {
-            cm.bindProcessToNetwork(null)
-            _state.value = State.Failed("Lost connection to camera Wi-Fi")
-        }
+        if (boundNetwork == network) _state.value = State.Failed("Lost connection to camera Wi-Fi")
     }
 
     /** Drops the camera network and restores normal routing. */
@@ -145,7 +141,6 @@ class CameraLink(context: Context, private val scope: CoroutineScope) {
         timeoutJob?.cancel()
         requestCallback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
         requestCallback = null
-        cm.bindProcessToNetwork(null)
     }
 
     @SuppressLint("MissingPermission")

@@ -113,6 +113,8 @@ fun HomeScreen(openCamera: () -> Unit, openLibrary: () -> Unit, openDownloads: (
     }
     // Auto-connect to the most recent camera on launch.
     LaunchedEffect(Unit) {
+        if (c.autoConnectDone) return@LaunchedEffect
+        c.autoConnectDone = true
         val s = c.prefs.settings.first()
         val last = c.prefs.devices.first().firstOrNull()
         if (s.autoConnectLast && last != null && c.session.state.value.phase == Phase.Disconnected) c.session.connect(last)
@@ -138,6 +140,8 @@ fun HomeScreen(openCamera: () -> Unit, openLibrary: () -> Unit, openDownloads: (
             item {
                 ConnectionCard(
                     state = state,
+                    last = devices.firstOrNull(),
+                    onConnect = { c.session.connect(it) },
                     onOpen = openCamera,
                     onCancel = { c.session.disconnect() },
                     onRetry = { devices.firstOrNull { it.ssid == state.ssid }?.let { c.session.connect(it) } ?: c.session.connectCurrentWifi() },
@@ -154,7 +158,7 @@ fun HomeScreen(openCamera: () -> Unit, openLibrary: () -> Unit, openDownloads: (
             if (devices.isEmpty()) {
                 item {
                     Text(
-                        "No cameras yet. Switch on your dashcam's Wi-Fi (usually a long-press of the Wi-Fi button), then tap Add camera.",
+                        "No cameras yet. Tip: the camera's Wi-Fi name and password are shown on its screen when you switch Wi-Fi on (default password ${NovatekClient.DEFAULT_PASSWORD}).",
                         Modifier.padding(horizontal = 20.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -169,8 +173,8 @@ fun HomeScreen(openCamera: () -> Unit, openLibrary: () -> Unit, openDownloads: (
             }
             item {
                 Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(onClick = { showAdd = true }) { Icon(Icons.Rounded.Add, null); Spacer(Modifier.width(6.dp)); Text("Add camera") }
-                    OutlinedButton(onClick = { c.session.connectCurrentWifi() }) { Text("Use current Wi-Fi") }
+                    if (devices.isNotEmpty()) FilledTonalButton(onClick = { showAdd = true }) { Icon(Icons.Rounded.Add, null); Spacer(Modifier.width(6.dp)); Text("Add camera") }
+                    OutlinedButton(onClick = { c.session.connectCurrentWifi() }) { Text("Already on camera Wi-Fi") }
                 }
             }
         }
@@ -196,7 +200,15 @@ fun HomeScreen(openCamera: () -> Unit, openLibrary: () -> Unit, openDownloads: (
 }
 
 @Composable
-private fun ConnectionCard(state: SessionState, onOpen: () -> Unit, onCancel: () -> Unit, onRetry: () -> Unit, onAdd: () -> Unit) {
+private fun ConnectionCard(
+    state: SessionState,
+    last: SavedDevice?,
+    onConnect: (SavedDevice) -> Unit,
+    onOpen: () -> Unit,
+    onCancel: () -> Unit,
+    onRetry: () -> Unit,
+    onAdd: () -> Unit,
+) {
     val context = LocalContext.current
     Card(
         Modifier.fillMaxWidth().padding(16.dp),
@@ -209,10 +221,14 @@ private fun ConnectionCard(state: SessionState, onOpen: () -> Unit, onCancel: ()
                     Phase.Disconnected -> {
                         HeroIcon(Icons.Outlined.Videocam)
                         Text("Not connected", style = MaterialTheme.typography.titleLarge)
-                        Text("Pick one of your cameras below, or add a new one. DashLink joins the camera's Wi-Fi for you and keeps your mobile data working.",
-                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            if (last == null) "Switch on your dashcam's Wi-Fi, then add it here. DashLink joins the camera's Wi-Fi for you and keeps your mobile data working."
+                            else "Make sure the camera is on with Wi-Fi enabled. DashLink joins it for you and keeps your mobile data working.",
+                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         Spacer(Modifier.height(16.dp))
-                        Button(onClick = onAdd) { Text("Add camera") }
+                        if (last != null) Button(onClick = { onConnect(last) }) { Text("Connect to ${last.model?.let { "VIOFO $it" } ?: last.ssid}") }
+                        else Button(onClick = onAdd) { Text("Add camera") }
                     }
                     Phase.JoiningWifi, Phase.Handshake, Phase.Reconnecting -> {
                         Row(verticalAlignment = Alignment.CenterVertically) {

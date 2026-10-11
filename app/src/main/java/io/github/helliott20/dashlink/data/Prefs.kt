@@ -24,7 +24,11 @@ data class AppSettings(
     val rtspOverTcp: Boolean = false,
     val autoConnectLast: Boolean = true,
     val keepScreenOnLive: Boolean = true,
+    val speedMph: Boolean = defaultMph(),
 )
+
+/** Countries that drive in miles per hour. */
+fun defaultMph(): Boolean = java.util.Locale.getDefault().country in setOf("US", "GB", "LR", "MM")
 
 class Prefs(private val context: Context) {
     private object K {
@@ -34,6 +38,7 @@ class Prefs(private val context: Context) {
         val rtspTcp = booleanPreferencesKey("rtsp_tcp")
         val autoConnect = booleanPreferencesKey("auto_connect")
         val keepScreenOn = booleanPreferencesKey("keep_screen_on")
+        val mph = booleanPreferencesKey("speed_mph")
     }
 
     val devices: Flow<List<SavedDevice>> = context.dataStore.data.map { decode(it[K.devices].orEmpty()) }
@@ -45,6 +50,7 @@ class Prefs(private val context: Context) {
             rtspOverTcp = it[K.rtspTcp] ?: false,
             autoConnectLast = it[K.autoConnect] ?: true,
             keepScreenOnLive = it[K.keepScreenOn] ?: true,
+            speedMph = it[K.mph] ?: defaultMph(),
         )
     }
 
@@ -60,7 +66,7 @@ class Prefs(private val context: Context) {
     suspend fun update(transform: (AppSettings) -> AppSettings) = context.dataStore.edit { p ->
         val cur = AppSettings(
             p[K.syncClock] ?: true, p[K.resumeRec] ?: true, p[K.rtspTcp] ?: false,
-            p[K.autoConnect] ?: true, p[K.keepScreenOn] ?: true,
+            p[K.autoConnect] ?: true, p[K.keepScreenOn] ?: true, p[K.mph] ?: defaultMph(),
         )
         val n = transform(cur)
         p[K.syncClock] = n.syncClockOnConnect
@@ -68,6 +74,7 @@ class Prefs(private val context: Context) {
         p[K.rtspTcp] = n.rtspOverTcp
         p[K.autoConnect] = n.autoConnectLast
         p[K.keepScreenOn] = n.keepScreenOnLive
+        p[K.mph] = n.speedMph
     }
 
     // Line/field separated with control chars that can't appear in an SSID or WPA passphrase.

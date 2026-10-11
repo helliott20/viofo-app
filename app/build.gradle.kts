@@ -38,6 +38,12 @@ android {
     }
     testOptions {
         unitTests.isReturnDefaultValues = true
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            it.systemProperty("robolectric.dependency.repo.url", "https://repo1.maven.org/maven2")
+            it.maxHeapSize = "3g"
+            it.systemProperty("roborazzi.test.record", "true")
+        }
     }
 }
 
@@ -57,6 +63,7 @@ dependencies {
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.rtsp)
     implementation(libs.media3.ui)
+    implementation(libs.media3.datasource.okhttp)
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
     implementation(libs.coil.video)
@@ -68,4 +75,10 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.json)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
 }

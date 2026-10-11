@@ -18,12 +18,17 @@ import io.github.helliott20.dashlink.net.Notify
 import io.github.helliott20.dashlink.net.NotifySocket
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -77,6 +82,8 @@ class CameraSession(
     private val prefs: Prefs,
     private val downloads: Downloads,
     private val scope: CoroutineScope,
+    sockets: javax.net.SocketFactory = javax.net.SocketFactory.getDefault(),
+    private val onNewNetwork: () -> Unit = {},
 ) {
     private val _state = MutableStateFlow(SessionState())
     val state: StateFlow<SessionState> = _state.asStateFlow()
@@ -91,17 +98,36 @@ class CameraSession(
     private val modeLock = Mutex()
     /** Was the camera recording before we switched it to playback? */
     private var resumeRecording = false
-    private val notify = NotifySocket(NovatekClient.DEFAULT_HOST, NovatekClient.NOTIFY_PORT, scope, ::onNotify)
+    private val notify = NotifySocket(client.baseUrl.host, NovatekClient.NOTIFY_PORT, scope, sockets, ::onNotify)
+    private var reconnectAttempts = 0
+
+    /** Screens that need the camera in playback mode (file list, remote player). */
+    private val browsers = MutableStateFlow(0)
+    private val foreground = MutableStateFlow(true)
 
     private val model get() = _state.value.model
 
     init {
+        // Safety net: whenever nothing needs playback mode, put the camera back to
+        // recording. Covers leaving the file browser, backgrounding the app and
+        // downloads finishing while nobody is looking.
+        scope.launch {
+            combine(_state, browsers, foreground, downloads.tasks) { st, b, fg, tasks ->
+                st.connected && st.mode != CameraMode.Live && (b == 0 || !fg) && tasks.none { it.isActive }
+            }.distinctUntilChanged().collectLatest { idle ->
+                if (idle) {
+                    delay(1_500)
+                    // Own job, so the state change it causes can't cancel it via collectLatest.
+                    scope.launch { enterLive() }
+                }
+            }
+        }
         scope.launch {
             link.state.collect { s ->
                 when (s) {
                     is CameraLink.State.Connecting -> if (_state.value.phase != Phase.Reconnecting)
                         _state.update { it.copy(phase = Phase.JoiningWifi, ssid = s.ssid ?: it.ssid, message = null) }
-                    is CameraLink.State.Connected -> startHandshake(s.ssid)
+                    is CameraLink.State.Connected -> { onNewNetwork(); startHandshake(s.ssid) }
                     is CameraLink.State.Failed -> onLinkFailed(s.reason, allowRetry = true)
                     CameraLink.State.Idle -> Unit
                 }
@@ -109,13 +135,24 @@ class CameraSession(
         }
     }
 
+    /** For screenshot tests and previews only. */
+    @androidx.annotation.VisibleForTesting
+    fun debugSetState(s: SessionState) { _state.value = s }
+
+    /** Call while a screen needs the camera's files (pair with [releaseBrowsing]). */
+    fun acquireBrowsing() = browsers.update { it + 1 }
+    fun releaseBrowsing() = browsers.update { (it - 1).coerceAtLeast(0) }
+    fun setForeground(fg: Boolean) { foreground.value = fg }
+
     fun connect(device: SavedDevice) {
+        reconnectAttempts = 0
         target = device
         _state.value = SessionState(phase = Phase.JoiningWifi, ssid = device.ssid)
         link.connect(device.ssid, device.password)
     }
 
     fun connectCurrentWifi() {
+        reconnectAttempts = 0
         target = null
         _state.value = SessionState(phase = Phase.JoiningWifi)
         link.useCurrentWifi()
@@ -149,7 +186,8 @@ class CameraSession(
         val wasReady = s.phase == Phase.Ready || s.phase == Phase.Reconnecting
         if (downloads.tasks.value.any { it.isActive }) downloads.pauseAll()
         val t = target
-        if (allowRetry && wasReady && t != null) {
+        if (allowRetry && wasReady && t != null && reconnectAttempts < MAX_RECONNECTS) {
+            reconnectAttempts++
             // Automatic recovery: cameras drop Wi-Fi briefly, e.g. when the engine cranks.
             _state.update { it.copy(phase = Phase.Reconnecting, message = reason) }
             scope.launch {
@@ -161,7 +199,8 @@ class CameraSession(
         }
     }
 
-    private fun startHandshake(ssid: String?) {
+    @androidx.annotation.VisibleForTesting
+    internal fun startHandshake(ssid: String?) {
         handshakeJob?.cancel()
         val reconnecting = _state.value.phase == Phase.Reconnecting
         _state.update { it.copy(phase = if (reconnecting) Phase.Reconnecting else Phase.Handshake, ssid = ssid ?: it.ssid) }
@@ -183,9 +222,12 @@ class CameraSession(
             val values = runCatching { client.currentState() }.getOrDefault(emptyMap())
             val free = runCatching { client.freeSpace() }.getOrNull()
             val wifi = runCatching { client.wifiCredentials() }.getOrNull()
+            reconnectAttempts = 0
             _state.update {
                 it.copy(
                     phase = Phase.Ready, message = null, firmware = fw, model = model,
+                    // Unknown after (re)connect: the screens / safety net pick the right mode.
+                    mode = CameraMode.Unknown,
                     freeBytes = free, cardPresent = card != 0, values = values,
                     recording = values[Cmd.RECORDING_TIME]?.let { v -> v != "0" } ?: it.recording,
                     micOn = values[Cmd.AUDIO]?.let { v -> v != "0" } ?: it.micOn,
@@ -281,9 +323,13 @@ class CameraSession(
 
     // ---- Modes ----
 
-    /** Live view: movie mode, live view on, fetch stream URL. Resumes recording if we paused it. */
-    suspend fun enterLive() = modeLock.withLock {
-        if (!_state.value.connected) return@withLock
+    /**
+     * Live view: movie mode, live view on, fetch stream URL. Resumes recording if we paused it.
+     * Non-cancellable: callers are often effects keyed on the mode this changes, and a
+     * half-finished switch could leave the camera not recording.
+     */
+    suspend fun enterLive() = withContext(NonCancellable) { modeLock.withLock {
+        if (!_state.value.connected || _state.value.mode == CameraMode.Live) return@withLock
         val fromPlayback = _state.value.mode == CameraMode.Playback
         if (fromPlayback && downloads.tasks.value.any { it.isActive }) return@withLock // keep serving files
         runCatching { client.setMode(Cmd.MODE_MOVIE) }
@@ -292,18 +338,18 @@ class CameraSession(
         if (fromPlayback && model?.let { it.a229Plus || it.name == "VS1" } == true) delay(4_000)
         _state.update { it.copy(mode = CameraMode.Live, liveUrl = url) }
         refreshValues()
-        if (fromPlayback && resumeRecording && prefs.settings.first().resumeRecordingOnExit && _state.value.recording != true) {
+        if (resumeRecording && prefs.settings.first().resumeRecordingOnExit && _state.value.recording != true) {
             delay(RESUME_DELAY_MS)
             runCatching { client.setRecording(true) }.onSuccess { _state.update { it.copy(recording = true) } }
         }
         resumeRecording = false
-    }
+    } }
 
     /**
      * The camera can only list and serve files in playback mode, which stops recording.
      * We remember whether it was recording so [enterLive] can resume it.
      */
-    suspend fun enterPlayback() = modeLock.withLock {
+    suspend fun enterPlayback() = withContext(NonCancellable) { modeLock.withLock {
         if (_state.value.mode == CameraMode.Playback) return@withLock
         if (_state.value.recording == true) {
             resumeRecording = true
@@ -316,7 +362,7 @@ class CameraSession(
         }.onFailure { _events.tryEmit("Couldn't switch the camera to playback: ${it.message}") }
         _state.update { it.copy(mode = CameraMode.Playback, recording = false) }
         delay(MODE_SETTLE_MS)
-    }
+    } }
 
     // ---- Actions ----
 
@@ -356,6 +402,9 @@ class CameraSession(
         client.takePhoto()
         _events.tryEmit("Snapshot saved to the SD card")
     }
+
+    /** Forces the live stream to re-open, e.g. after the user taps retry. */
+    fun reloadLive() = _state.update { it.copy(liveToken = it.liveToken + 1) }
 
     /** Next camera (cycling models) or a specific display mode index. */
     fun switchCamera(index: Int?) = act("camera switch") {
@@ -494,5 +543,6 @@ class CameraSession(
         private const val MODE_SETTLE_MS = 500L
         private const val RESUME_DELAY_MS = 600L
         private const val RESOLUTION_SETTLE_MS = 6_000L
+        private const val MAX_RECONNECTS = 4
     }
 }

@@ -44,7 +44,8 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -72,7 +73,8 @@ import kotlinx.coroutines.launch
 fun LibraryScreen(back: () -> Unit, open: (Uri) -> Unit) {
     val context = LocalContext.current
     var reload by remember { mutableIntStateOf(0) }
-    val clips by produceState<List<LocalClip>?>(null, reload) { value = LocalMedia.list(context) }
+    var clips by remember { mutableStateOf<List<LocalClip>?>(null) }
+    LaunchedEffect(reload) { clips = LocalMedia.list(context) }
     Scaffold(topBar = {
         TopAppBar(
             navigationIcon = { IconButton(onClick = back) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
@@ -185,6 +187,7 @@ fun AppSettingsScreen(back: () -> Unit) {
             item { SectionHeader("Live view") }
             item { Toggle("Force RTSP over TCP", "More reliable on some phones; slightly more delay. DashLink switches automatically if UDP fails.", s.rtspOverTcp) { v -> set { it.copy(rtspOverTcp = v) } } }
             item { Toggle("Keep screen on", "While live view is open", s.keepScreenOnLive) { v -> set { it.copy(keepScreenOnLive = v) } } }
+            item { Toggle("Show speed in mph", "Otherwise km/h, for GPS playback", s.speedMph) { v -> set { it.copy(speedMph = v) } } }
             item { SectionHeader("Recording") }
             item { Toggle("Resume recording after browsing", "The camera stops recording while you browse files; start it again when you return to Live or leave the app", s.resumeRecordingOnExit) { v -> set { it.copy(resumeRecordingOnExit = v) } } }
             item { SectionHeader("About") }

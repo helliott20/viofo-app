@@ -10,7 +10,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.InetSocketAddress
-import java.net.Socket
 
 /**
  * The camera pushes status events (recording started/stopped, mic, SD card removed,
@@ -22,10 +21,11 @@ class NotifySocket(
     private val host: String,
     private val port: Int,
     private val scope: CoroutineScope,
+    private val sockets: javax.net.SocketFactory,
     private val onStatus: (Int) -> Unit,
 ) {
     private var job: Job? = null
-    @Volatile private var socket: Socket? = null
+    @Volatile private var socket: java.net.Socket? = null
 
     fun start() {
         if (job?.isActive == true) return
@@ -33,7 +33,7 @@ class NotifySocket(
             var backoff = 1_000L
             while (isActive) {
                 try {
-                    Socket().use { s ->
+                    sockets.createSocket().use { s ->
                         socket = s
                         s.connect(InetSocketAddress(host, port), 5_000)
                         s.soTimeout = 0

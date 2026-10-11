@@ -37,11 +37,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -54,6 +54,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.helliott20.dashlink.api.CamFile
+import io.github.helliott20.dashlink.data.AppSettings
+import io.github.helliott20.dashlink.session.CameraMode
 import io.github.helliott20.dashlink.gps.GpsParser
 import io.github.helliott20.dashlink.gps.GpsPoint
 import io.github.helliott20.dashlink.ui.LocalContainer
@@ -80,6 +82,13 @@ fun RemotePlayerScreen(fpath: String, back: () -> Unit) {
     val snack = remember { SnackbarHostState() }
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     SessionSnackbars(snack)
+    DisposableEffect(Unit) {
+        c.session.acquireBrowsing()
+        onDispose { c.session.releaseBrowsing() }
+    }
+    LaunchedEffect(state.connected, state.mode) {
+        if (state.connected && state.mode != CameraMode.Playback) c.session.enterPlayback()
+    }
 
     if (file == null) {
         LaunchedEffect(Unit) { back() }
@@ -134,7 +143,8 @@ fun RemotePlayerScreen(fpath: String, back: () -> Unit) {
         }
     }
     if (confirmDelete) ConfirmDialog("Delete this file?", "It will be removed from the camera's SD card.", "Delete",
-        onConfirm = { c.session.delete(listOf(file)) { back() } }, onDismiss = { confirmDelete = false }, destructive = true)
+        // The screen closes itself once the file disappears from the list.
+        onConfirm = { c.session.delete(listOf(file)) }, onDismiss = { confirmDelete = false }, destructive = true)
 }
 
 /** Plays a downloaded clip, with its GPS track on a map. */
@@ -143,8 +153,9 @@ fun RemotePlayerScreen(fpath: String, back: () -> Unit) {
 fun LocalPlayerScreen(uri: Uri, back: () -> Unit) {
     val context = LocalContext.current
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val track by produceState<List<GpsPoint>?>(null, uri) {
-        value = withContext(Dispatchers.IO) {
+    var track by remember(uri) { mutableStateOf<List<GpsPoint>?>(null) }
+    LaunchedEffect(uri) {
+        track = withContext(Dispatchers.IO) {
             runCatching {
                 context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
                     FileInputStream(pfd.fileDescriptor).channel.use { GpsParser.parse(it) }
@@ -153,13 +164,15 @@ fun LocalPlayerScreen(uri: Uri, back: () -> Unit) {
         }
     }
     var position by remember { mutableLongStateOf(0L) }
+    val prefs by LocalContainer.current.prefs.settings.collectAsStateWithLifecycle(AppSettings())
+    val speed: (Double) -> String = { kmh -> if (prefs.speedMph) String.format(Locale.US, "%.0f mph", kmh / 1.609344) else String.format(Locale.US, "%.0f km/h", kmh) }
     val point = track?.let { t -> if (t.isEmpty()) null else t[(position / 1000).toInt().coerceIn(0, t.lastIndex)] }
     val name = remember(uri) { uri.lastPathSegment.orEmpty() }
 
     if (landscape) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             ClipPlayer(uri, Modifier.fillMaxSize(), onPosition = { position = it })
-            point?.let { SpeedBadge(it, Modifier.align(Alignment.TopEnd).padding(16.dp)) }
+            point?.let { SpeedBadge(speed(it.speedKmh), Modifier.align(Alignment.TopEnd).padding(16.dp)) }
         }
         return
     }
@@ -182,15 +195,15 @@ fun LocalPlayerScreen(uri: Uri, back: () -> Unit) {
         Column(Modifier.fillMaxSize().padding(pad)) {
             Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black)) {
                 ClipPlayer(uri, Modifier.fillMaxSize(), onPosition = { position = it })
-                point?.let { SpeedBadge(it, Modifier.align(Alignment.TopEnd).padding(12.dp)) }
+                point?.let { SpeedBadge(speed(it.speedKmh), Modifier.align(Alignment.TopEnd).padding(12.dp)) }
             }
             when {
                 track == null -> Text("Reading GPS…", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 track!!.isEmpty() -> Text("No GPS data in this clip (GPS off, no fix yet, or a photo).", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 else -> {
                     Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                        Stat("Speed", point?.let { String.format(Locale.US, "%.0f km/h", it.speedKmh) } ?: "—")
-                        Stat("Max", String.format(Locale.US, "%.0f km/h", track!!.maxOf { it.speedKmh }))
+                        Stat("Speed", point?.let { speed(it.speedKmh) } ?: "—")
+                        Stat("Max", speed(track!!.maxOf { it.speedKmh }))
                         Stat("Position", point?.let { String.format(Locale.US, "%.5f, %.5f", it.lat, it.lon) } ?: "—")
                     }
                     RouteMap(track!!, point, Modifier.fillMaxWidth().weight(1f).padding(horizontal = 16.dp).padding(bottom = 16.dp).clip(RoundedCornerShape(16.dp)))
@@ -209,12 +222,12 @@ private fun Stat(label: String, value: String) {
 }
 
 @Composable
-private fun SpeedBadge(p: GpsPoint, modifier: Modifier) {
+private fun SpeedBadge(text: String, modifier: Modifier) {
     Surface(modifier, shape = RoundedCornerShape(12.dp), color = Color.Black.copy(alpha = 0.6f), contentColor = Color.White) {
         Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.Speed, null)
             Spacer(Modifier.width(6.dp))
-            Text(String.format(Locale.US, "%.0f km/h", p.speedKmh), fontWeight = FontWeight.Bold)
+            Text(text, fontWeight = FontWeight.Bold)
         }
     }
 }

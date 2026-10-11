@@ -32,7 +32,11 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import io.github.helliott20.dashlink.ui.LocalContainer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
@@ -51,6 +55,7 @@ fun LiveStream(
     onState: (playing: Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
+    val container = LocalContainer.current
     var attempt by remember(url) { mutableIntStateOf(0) }
     var error by remember(url) { mutableStateOf<String?>(null) }
     var buffering by remember(url) { mutableStateOf(true) }
@@ -63,6 +68,7 @@ fun LiveStream(
             .build()
         ExoPlayer.Builder(context).setLoadControl(load).build().apply {
             val src = RtspMediaSource.Factory()
+                .setSocketFactory(container.cameraSockets)
                 .setForceUseRtpTcp(useTcp)
                 .setTimeoutMs(6_000)
                 .createMediaSource(MediaItem.fromUri(Uri.parse(url)))
@@ -133,8 +139,11 @@ fun ClipPlayer(
     seekTo: Long? = null,
 ) {
     val context = LocalContext.current
+    val container = LocalContainer.current
     val player = remember(uri) {
-        ExoPlayer.Builder(context).build().apply {
+        // Camera clips stream over the camera network; local content:// URIs work too.
+        val data = DefaultDataSource.Factory(context, OkHttpDataSource.Factory(container.downloadHttp))
+        ExoPlayer.Builder(context).setMediaSourceFactory(DefaultMediaSourceFactory(data)).build().apply {
             setMediaItem(MediaItem.fromUri(uri))
             playWhenReady = true
             prepare()

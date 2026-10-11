@@ -102,7 +102,7 @@ fun CameraScreen(back: () -> Unit, openRemote: (CamFile) -> Unit, openDownloads:
     ) { pad ->
         Box(Modifier.fillMaxSize().padding(if (immersive) androidx.compose.foundation.layout.PaddingValues() else pad)) {
             when (tab) {
-                0 -> LiveTab(fullscreen = immersive)
+                0 -> LiveTab(fullscreen = immersive, openSettings = { tab = 2 }, openDownloads = openDownloads)
                 1 -> FilesTab(openRemote = openRemote, openDownloads = openDownloads)
                 else -> CameraSettingsTab()
             }

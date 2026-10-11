@@ -9,8 +9,7 @@ import coil.memory.MemoryCache
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
-import io.github.helliott20.dashlink.session.CameraMode
-import kotlinx.coroutines.launch
+
 
 class App : Application(), ImageLoaderFactory {
     lateinit var container: AppContainer
@@ -19,12 +18,11 @@ class App : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
-        // If the user leaves the app while browsing files, don't leave the dashcam stopped.
+        // If the user leaves the app while browsing files, the session puts the dashcam
+        // back to recording (see CameraSession's safety net).
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onStop(owner: LifecycleOwner) {
-                val s = container.session.state.value
-                if (s.connected && s.mode == CameraMode.Playback) container.scope.launch { container.session.enterLive() }
-            }
+            override fun onStart(owner: LifecycleOwner) = container.session.setForeground(true)
+            override fun onStop(owner: LifecycleOwner) = container.session.setForeground(false)
         })
     }
 

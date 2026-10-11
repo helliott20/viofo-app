@@ -47,6 +47,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -67,6 +68,7 @@ import io.github.helliott20.dashlink.api.CamFile
 import io.github.helliott20.dashlink.api.Category
 import io.github.helliott20.dashlink.api.Lens
 import io.github.helliott20.dashlink.data.DownloadState
+import io.github.helliott20.dashlink.session.CameraMode
 import io.github.helliott20.dashlink.ui.LocalContainer
 import io.github.helliott20.dashlink.ui.components.ConfirmDialog
 import io.github.helliott20.dashlink.ui.components.EmptyState
@@ -84,7 +86,15 @@ fun FilesTab(openRemote: (CamFile) -> Unit, openDownloads: () -> Unit) {
     var selected by remember { mutableStateOf(setOf<String>()) }
     var confirmDelete by remember { mutableStateOf(false) }
 
-    LaunchedEffect(state.connected) { if (state.connected && !state.filesLoaded) c.session.loadFiles() }
+    // Needs playback mode while visible; the session resumes recording once we leave.
+    DisposableEffect(Unit) {
+        c.session.acquireBrowsing()
+        onDispose { c.session.releaseBrowsing() }
+    }
+    // (Re)load whenever the camera isn't in playback mode, e.g. on entry or after a reconnect.
+    LaunchedEffect(state.connected, state.mode) {
+        if (state.connected && state.mode != CameraMode.Playback) c.session.loadFiles()
+    }
     BackHandler(selected.isNotEmpty()) { selected = emptySet() }
 
     val downloaded = remember(tasks) { tasks.filter { it.state == DownloadState.Done }.map { it.name }.toSet() }
